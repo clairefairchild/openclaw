@@ -29,6 +29,7 @@ export {
   type SessionOwnerSessionCount,
 } from "./sessions-list.js";
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
+export * from "./sessions-recovery-inspect.js";
 export {
   SessionParticipantIdentitySchema,
   SessionParticipantSchema,

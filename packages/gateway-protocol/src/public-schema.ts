@@ -245,6 +245,8 @@ export {
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
+  SessionsRecoveryInspectParamsSchema,
+  SessionsRecoveryInspectResultSchema,
   SessionsRecoverParamsSchema,
   SessionsRecoverResultSchema,
   SessionsDispatchParamsSchema,
