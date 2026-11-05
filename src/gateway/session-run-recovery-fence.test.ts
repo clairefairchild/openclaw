@@ -138,7 +138,7 @@ describe("run recovery fence", () => {
     rebound.sourceRoute.generation = "new-route";
     expect(verify(rebound)).toBe(false);
     expect(verifyRunRecoveryReviewToken({
-      token: `${token.slice(0, -1)}x`, snapshot, callerId: "reviewer-1", secret, now: 1000,
+      token: `${token.slice(0, -1)}${token.endsWith("x") ? "y" : "x"}`, snapshot, callerId: "reviewer-1", secret, now: 1000,
     })).toBe(false);
   });
 });
