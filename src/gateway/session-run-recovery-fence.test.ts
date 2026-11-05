@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateRunRecoveryFence,
+  issueRunRecoveryReviewToken,
+  verifyRunRecoveryReviewToken,
   type RunRecoveryCustodyFamily,
   type RunRecoveryIdentity,
   type RunRecoverySemanticReview,
@@ -117,5 +119,26 @@ describe("run recovery fence", () => {
       mutate(input);
       expect(evaluateRunRecoveryFence(input)).toMatchObject({ eligible: false });
     }
+  });
+  it("binds a short-lived review token to caller and complete metadata generation", () => {
+    const secret = Buffer.alloc(32, 7);
+    const snapshot = eligible().snapshot;
+    const token = issueRunRecoveryReviewToken({
+      snapshot, callerId: "reviewer-1", secret, now: 1000, expiresAt: 61_000,
+    });
+    const verify = (candidate: RunRecoverySnapshot, callerId = "reviewer-1", now = 1000) =>
+      verifyRunRecoveryReviewToken({ token, snapshot: candidate, callerId, secret, now });
+    expect(verify(snapshot)).toBe(true);
+    expect(verify(snapshot, "reviewer-2")).toBe(false);
+    expect(verify(snapshot, "reviewer-1", 61_000)).toBe(false);
+    const spawned = eligible().snapshot;
+    spawned.custody.descendant.active = true;
+    expect(verify(spawned)).toBe(false);
+    const rebound = eligible().snapshot;
+    rebound.sourceRoute.generation = "new-route";
+    expect(verify(rebound)).toBe(false);
+    expect(verifyRunRecoveryReviewToken({
+      token: `${token.slice(0, -1)}x`, snapshot, callerId: "reviewer-1", secret, now: 1000,
+    })).toBe(false);
   });
 });
