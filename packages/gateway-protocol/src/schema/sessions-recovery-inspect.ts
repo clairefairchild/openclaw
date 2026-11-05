@@ -26,6 +26,7 @@ export const SessionsRecoveryInspectResultSchema = closedObject({
   executionId: Type.Optional(NonEmptyString),
   storeRevision: Type.Optional(NonEmptyString),
   ownerEpoch: Type.Optional(Type.Integer({ minimum: 0 })),
+  ownerLifecycleGeneration: Type.Optional(NonEmptyString),
   placementGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
   sourceRouteGeneration: Type.Optional(NonEmptyString),
   originalInputReceiptId: Type.Optional(NonEmptyString),

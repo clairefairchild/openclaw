@@ -61,7 +61,10 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
     const result = inspectGatewayRunRecovery({
       agentId: target.agentId,
       key: target.canonicalKey,
+      storePath: target.storePath,
       entry,
+      chatAbortControllers: context.chatAbortControllers,
+      chatQueuedTurns: context.chatQueuedTurns,
     });
     // Exact run selection never falls back to another run sharing the key.
     if (params.runId && result.runId !== params.runId) {

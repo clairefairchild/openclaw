@@ -16,6 +16,7 @@ export function getAgentRunRegistryState(): AgentRunRegistryState {
     owners: new Map<string, AgentRunContextOwnership>(),
     lifecycleGeneration: randomUUID(),
     version: 0,
+    recoveryOwnerEpochCounter: 0,
   }));
 }
 

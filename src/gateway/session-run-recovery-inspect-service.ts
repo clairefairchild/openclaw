@@ -1,59 +1,72 @@
 import type { SessionsRecoveryInspectResult } from "../../packages/gateway-protocol/src/schema/sessions-recovery-inspect.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import {
-  getAgentRunContext,
-  hasAgentRunContextExecutionOwner,
-  listAgentRunsForSession,
-} from "../infra/agent-run-registry.js";
+import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
+import { readSessionRecoveryAdmissionSnapshot } from "../sessions/session-lifecycle-admission.js";
 
 const UNKNOWN = { complete: false, state: "unknown" } as const;
 const ACTIVE = { complete: true, state: "active" } as const;
 
-/** Read-only, deliberately incomplete evidence. A missing registry owner is not proof of quiescence. */
+/**
+ * Metadata-only read. Each process-local family is captured by its own owner
+ * synchronously, without an await between the session row and custody reads.
+ * Absence from a process-local index never proves terminal or global quiescence.
+ */
 export function inspectGatewayRunRecovery(params: {
   agentId: string;
   key: string;
+  storePath: string;
   entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId">>;
-  listRuns?: typeof listAgentRunsForSession;
-  getRunContext?: typeof getAgentRunContext;
-  hasExecutionOwner?: typeof hasAgentRunContextExecutionOwner;
+  chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
+  chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
+  readRunOwners?: typeof readAgentRunRecoveryOwnerSnapshot;
+  readAdmissions?: typeof readSessionRecoveryAdmissionSnapshot;
 }): SessionsRecoveryInspectResult {
   const { agentId, key, entry } = params;
-  const listRuns = params.listRuns ?? listAgentRunsForSession;
-  const getRunContext = params.getRunContext ?? getAgentRunContext;
-  const hasExecutionOwner = params.hasExecutionOwner ?? hasAgentRunContextExecutionOwner;
   const observedRunId = entry.lifecycleRunId || entry.lastRunId;
-  const registered = listRuns({ sessionKey: key, sessionId: entry.sessionId });
-  const matchingOwners = registered.filter(({ runId }) => {
-    const context = getRunContext(runId);
-    return context?.sessionKey === key &&
-      context.sessionId === entry.sessionId &&
-      context.agentId === agentId &&
-      hasExecutionOwner(runId);
+  const owners = (params.readRunOwners ?? readAgentRunRecoveryOwnerSnapshot)({
+    agentId, sessionKey: key, sessionId: entry.sessionId,
   });
-  // A live owner of another run in this exact session is still a direct veto.
-  const direct = matchingOwners.length > 0 ? ACTIVE : UNKNOWN;
-  // lifecycleRunId and lastRunId are observations, not an execution identity or a
-  // terminal receipt. Missing queue/child/worker records cannot be called empty.
+  const admissions = (params.readAdmissions ?? readSessionRecoveryAdmissionSnapshot)({
+    scope: params.storePath, sessionKey: key, sessionId: entry.sessionId,
+  });
+  // These Gateway maps are owner-owned and sampled in this same synchronous
+  // call. They prove presence only, never the absence of a different owner.
+  const matches = (candidate: { agentId?: string; sessionKey: string; sessionId: string }) =>
+    candidate.agentId === agentId && candidate.sessionKey === key &&
+    candidate.sessionId === entry.sessionId;
+  const directControllerRunIds = [...(params.chatAbortControllers?.entries() ?? [])]
+    .filter(([, controller]) => matches(controller)).map(([runId]) => runId);
+  const directControllerActive = directControllerRunIds.length > 0;
+  const queuedTurnActive = [...(params.chatQueuedTurns?.values() ?? [])]
+    .some(matches);
+  const exactOwner = owners.consistent && observedRunId && owners.exactOwners.length === 1 &&
+    owners.exactOwners[0]?.runId === observedRunId &&
+    owners.activeRunIds.length === 1 && owners.activeRunIds[0] === observedRunId &&
+    directControllerRunIds.every((runId) => runId === observedRunId)
+    ? owners.exactOwners[0] : undefined;
   return {
     agentId,
     key,
     sessionId: entry.sessionId,
     ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
     ...(observedRunId ? { runId: observedRunId } : {}),
+    ...(exactOwner ? { ownerEpoch: exactOwner.ownerEpoch,
+      ownerLifecycleGeneration: owners.lifecycleGeneration } : {}),
     ...(entry.status ? { observedSessionStatus: entry.status } : {}),
     metadataCompleteness: {
       identity: true,
       execution: false,
       store: false,
-      owner: false,
+      owner: Boolean(exactOwner),
       placement: false,
       route: false,
     },
     evidence: {
-      direct,
-      pendingAdmission: UNKNOWN,
-      followupQueue: UNKNOWN,
+      direct: (owners.consistent && owners.activeRunIds.length > 0) ||
+        directControllerActive ? ACTIVE : UNKNOWN,
+      pendingAdmission: admissions.pending || admissions.active ? ACTIVE : UNKNOWN,
+      followupQueue: queuedTurnActive ? ACTIVE : UNKNOWN,
       laneQueue: UNKNOWN,
       pendingInput: UNKNOWN,
       descendant: UNKNOWN,
@@ -65,7 +78,7 @@ export function inspectGatewayRunRecovery(params: {
       delivery: UNKNOWN,
       progress: UNKNOWN,
     },
-    // No review token can be issued until exact execution, owner, placement,
-    // input, and route generations have authoritative Gateway owners.
+    // A live owner can never receive a recovery token. The remaining families
+    // also cannot prove absence or stable input/source generations yet.
   };
 }

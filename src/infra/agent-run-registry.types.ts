@@ -69,6 +69,8 @@ export type AgentRunContextOwnership = {
   sweepProtectedClaimIds: Set<string>;
   preserveAfterRelease: boolean;
   clearRequested: boolean;
+  /** Process-local monotonic generation of this run's execution-owner set. */
+  recoveryOwnerEpoch?: number;
   exclusiveClaimId?: string;
   clearListeners?: Map<string, (claimId: string) => void>;
 };
@@ -83,6 +85,7 @@ export type AgentRunRegistryState = {
     (authority: AgentRunDelegatedAuthority, approvalReason?: AgentRunApprovalClosureReason) => void
   >;
   version: number;
+  recoveryOwnerEpochCounter?: number;
 };
 
 export type ProjectedAgentRunState = "queued" | "running" | "capacity-wait";

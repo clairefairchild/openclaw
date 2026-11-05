@@ -205,6 +205,7 @@ export function claimAgentRunContext(
     return undefined;
   }
   const state = getAgentRunRegistryState();
+  state.recoveryOwnerEpochCounter ??= 0;
   const lifecycleGeneration = context.lifecycleGeneration ?? state.lifecycleGeneration;
   const existing = state.contexts.get(runId);
   const existingOwners = state.owners.get(runId);
@@ -228,6 +229,8 @@ export function claimAgentRunContext(
     claimId = randomUUID();
     if (currentOwners) {
       currentOwners.claimIds.add(claimId);
+      currentOwners.recoveryOwnerEpoch = (state.recoveryOwnerEpochCounter =
+        (state.recoveryOwnerEpochCounter ?? 0) + 1);
       if (options.protectFromSweep) {
         currentOwners.sweepProtectedClaimIds.add(claimId);
       }
@@ -246,6 +249,8 @@ export function claimAgentRunContext(
         preserveAfterRelease:
           options.ownsContext !== true && existing?.lifecycleGeneration === lifecycleGeneration,
         clearRequested: false,
+        recoveryOwnerEpoch: (state.recoveryOwnerEpochCounter =
+          (state.recoveryOwnerEpochCounter ?? 0) + 1),
         ...(options.exclusive ? { exclusiveClaimId: claimId } : {}),
         ...(options.onClearRequested
           ? { clearListeners: new Map([[claimId, options.onClearRequested]]) }
@@ -533,6 +538,51 @@ export function hasAgentRunContextExecutionOwner(runId: string): boolean {
   );
 }
 
+/** One synchronous, owner-owned snapshot. A missing record is not terminal proof. */
+export function readAgentRunRecoveryOwnerSnapshot(params: {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+}): {
+  registryVersion: number;
+  lifecycleGeneration: string;
+  consistent: boolean;
+  activeRunIds: readonly string[];
+  exactOwners: readonly { runId: string; ownerEpoch: number }[];
+} {
+  const state = getAgentRunRegistryState();
+  const startVersion = state.version;
+  const startGeneration = state.lifecycleGeneration;
+  const activeRunIds: string[] = [];
+  const exactOwners: { runId: string; ownerEpoch: number }[] = [];
+  for (const [runId, context] of state.contexts) {
+    if (context.lifecycleGeneration !== startGeneration ||
+        context.sessionKey !== params.sessionKey ||
+        (context.agentId && context.agentId !== params.agentId) ||
+        (context.sessionId && context.sessionId !== params.sessionId)) {
+      continue;
+    }
+    const owner = state.owners.get(runId);
+    const tracked = owner?.lifecycleGeneration === startGeneration &&
+      owner.claimIds.size > 0;
+    const queued = (state.queuedRunContextLeases?.get(context) ?? 0) > 0;
+    if (tracked || queued) {
+      activeRunIds.push(runId);
+    }
+    if (tracked && owner.recoveryOwnerEpoch !== undefined &&
+        context.agentId === params.agentId && context.sessionId === params.sessionId) {
+      exactOwners.push({ runId, ownerEpoch: owner.recoveryOwnerEpoch });
+    }
+  }
+  return {
+    registryVersion: startVersion,
+    lifecycleGeneration: startGeneration,
+    consistent: state.version === startVersion && state.lifecycleGeneration === startGeneration,
+    activeRunIds: activeRunIds.toSorted(),
+    exactOwners: exactOwners.toSorted((a, b) => a.runId.localeCompare(b.runId)),
+  };
+}
+
 /** Counts admitted executions, excluding retained display-only context. */
 export function getActiveAgentRunContextCount(): number {
   let count = 0;
@@ -672,10 +722,13 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
     return;
   }
   const state = getAgentRunRegistryState();
+  state.recoveryOwnerEpochCounter ??= 0;
   const owners = state.owners.get(runId);
   if (!owners?.claimIds.delete(claimId)) {
     return;
   }
+  owners.recoveryOwnerEpoch = (state.recoveryOwnerEpochCounter =
+    (state.recoveryOwnerEpochCounter ?? 0) + 1);
   const context = state.contexts.get(runId);
   const authority = context?.delegatedAuthority;
   if (context && authority?.claimId === claimId) {

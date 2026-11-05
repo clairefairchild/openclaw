@@ -370,6 +370,33 @@ export function hasOnlySessionLifecycleMutationKindActive(
   );
 }
 
+/** Synchronous snapshot of the lifecycle owner's exact target reservation. */
+export function readSessionRecoveryAdmissionSnapshot(params: {
+  scope: string;
+  sessionKey: string;
+  sessionId: string;
+}): { active: boolean; pending: boolean } {
+  const identities = normalizeSessionIdentities(params.scope, [
+    params.sessionKey,
+    params.sessionId,
+  ]);
+  const matching = new Set<SessionWorkAdmission>();
+  for (const identity of identities) {
+    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
+      // A key-only or ID-only lease owns that identity. A multi-identity lease
+      // must bind both, so another session cannot be projected onto this one.
+      if (admission.identities.size === 1 ||
+          identities.every((target) => admission.identities.has(target))) {
+        matching.add(admission);
+      }
+    }
+  }
+  return {
+    active: [...matching].some((admission) => admission.phase === "acquired"),
+    pending: [...matching].some((admission) => admission.phase === "pending"),
+  };
+}
+
 export function isSessionWorkAdmissionActive(
   scope: string,
   identities: Iterable<string | undefined>,
