@@ -5,8 +5,8 @@ export type RunRecoveryIdentity = {
   sessionId: string;
   executionId: string;
   runId: string;
-  lifecycleRevision: number;
-  storeRevision: number;
+  lifecycleRevision: string;
+  storeRevision: string;
   ownerEpoch: number;
   placementGeneration: number;
   sourceRouteGeneration: string;

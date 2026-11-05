@@ -13,8 +13,8 @@ const identity: RunRecoveryIdentity = {
   sessionId: "session-1",
   executionId: "execution-1",
   runId: "run-1",
-  lifecycleRevision: 2,
-  storeRevision: 3,
+  lifecycleRevision: "revision-2",
+  storeRevision: "revision-3",
   ownerEpoch: 4,
   placementGeneration: 5,
   sourceRouteGeneration: "route-6",
@@ -90,7 +90,7 @@ describe("run recovery fence", () => {
     "originalInputReceiptId",
   ] as const)("vetoes changed %s", (field) => {
     const changed = eligible();
-    (changed.snapshot.identity as Record<string, unknown>)[field] = "changed";
+    (changed.snapshot.identity as unknown as Record<string, unknown>)[field] = "changed";
     expect(evaluateRunRecoveryFence(changed)).toEqual({
       eligible: false,
       reason: "identity_changed",
