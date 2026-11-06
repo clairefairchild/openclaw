@@ -6,35 +6,44 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
-  focused-recovery:
-    runs-on: ubuntu-latest
+  validate:
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Check out exact recovery branch commit
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Verify source identity
-        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - name: Assert exact source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          echo "Validated source SHA: ${GITHUB_SHA}"
+      - name: Setup Node and dependencies
+        uses: ./.github/actions/setup-node-env
         with:
-          node-version: 24.21.0
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-      - name: Frozen install
-        run: pnpm install --frozen-lockfile
-      - name: Focused followup custody tests
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: restore
+      - name: Core typecheck
+        run: pnpm tsgo:core
+      - name: Focused recovery custody tests
         run: >-
           pnpm test
+          src/process/command-queue.recovery-custody.test.ts
+          src/process/command-queue.test.ts
+          src/gateway/server-methods/system-agent-concurrency.test.ts
+          src/cron/service.wake-now-real-heartbeat.test.ts
+
           src/auto-reply/reply/queue/recovery-custody.test.ts
           src/auto-reply/reply/queue.in-flight.test.ts
           src/auto-reply/reply/queue.collect.test.ts
           src/auto-reply/reply/followup-runner.test.ts
+          src/config/sessions/session-accessor.pending-inputs.test.ts
+          src/gateway/session-run-recovery-fence.test.ts
           src/state/run-recovery-queue-coordinator.test.ts
-      - name: Core typecheck
-        run: pnpm tsgo:core

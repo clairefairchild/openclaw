@@ -65,3 +65,29 @@ The coordinator is the only durable recovery claim and accepted-input/outbox own
 Handoff reads the coordinator row by its immutable key. The existing agent pending-input writer inserts actual runnable input and an agent-local admission fence in one agent-database transaction, rechecking original terminal, lineage, route, physical store, and absence of newer unconsumed input. The agent row is a compatibility fence/projection, not a second claim owner. The outbox handoff receipt records the exact pending-input ID only after readback. A crash or ambiguous acknowledgment leaves the outbox and agent input for key-based reconciliation; a repeated handoff with an existing accepted row returns a non-runnable reconciliation result, never another send. New queue reservations invalidate affected outbox rows in the same coordinator transaction. No automatic dispatch/retry is installed by this stage. The bridge cannot make recovery eligible until both producer families genuinely cut over and all remaining custody and delivery evidence becomes complete.
 
 Migration is additive on coordinator open after integrity, required legacy schema, and physical incarnation validation. Existing reservations and intents remain unchanged; no coordinator or agent schema-version marker changes. Rollback uses the previous source build, which ignores the new table and retains all rows. Do not delete it or clear the agent-local fence to manufacture eligibility. Reinstalling the bridge may inspect and reconcile by immutable key; any unconfirmed handoff stays held for operator review. The source change does not authorize a live Gateway restart, marker switch, send, or ledger mutation.
+
+## Stage 9 limited Gateway command-lane ingress (source only, incomplete)
+
+The Gateway-owned system-agent RPC and cron manual-run command-lane callers use
+the guarded ingress. Each submitted task receives a distinct durable work ID
+with conservative `unmarked` scope, reserved before queue publication. The
+bridge starts before task effects, settles definitive pre-start rejection and
+successful current-generation task completion, and retains failure, timeout,
+reset, lost acknowledgment, or stale completion for reconciliation.
+
+The broader production caller migration is **blocked**. An exact-source caller
+suite showed embedded agent lane admission executes in an application worker.
+That worker cannot open the coordinator's SQLite store: the host broker
+connection is required, and `openSqliteWorkerStore` explicitly refuses a
+non-main-thread open. Do not mock, bypass, or weaken that boundary. Embedded
+run, compaction, session placement, context-engine maintenance, and generic
+background-work callers therefore remain on the original command lane until a
+reviewed worker-to-host coordinator route is available. The isolated source
+branch is not a deployable complete cutover.
+
+No command-lane producer marker is written. Pre-existing in-memory queue work
+at a future deployment boundary has no durable work ID and cannot be cleared
+from an empty snapshot after restart. Its authoritative owner receipts, as
+well as abort, clear, group drain, timeout, and downstream terminal receipts,
+need reconciliation before the marker can be set. Retain all unresolved ledger
+rows for exact-ID review. Recovery remains held with `queue_not_cut_over`.
