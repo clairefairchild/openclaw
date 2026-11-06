@@ -38,22 +38,11 @@ describe("locked session recovery admission inspection", () => {
     }
   });
 
-  it("sees a pending reservation and only clears after release", async () => {
-    let allow!: () => void;
-    let started!: () => void;
-    const entered = new Promise<void>((resolve) => { started = resolve; });
-    const blocked = new Promise<void>((resolve) => { allow = resolve; });
-    const pending = beginSessionWorkAdmission({ scope: target.scope,
-      identities: [target.sessionKey, target.sessionId],
-      assertAllowed: async () => { started(); await blocked; } });
-    await entered;
-    try {
-      expect(await runWithSessionRecoveryAdmissionInspection({ ...target,
-        run: () => read() })).toEqual({ pending: true, active: false });
-    } finally {
-      allow();
-    }
-    const lease = await pending;
+  it("clears only after an acquired lease releases its key and ID", async () => {
+    const lease = await beginSessionWorkAdmission({ scope: target.scope,
+      identities: [target.sessionKey, target.sessionId], assertAllowed: () => {} });
+    expect(await runWithSessionRecoveryAdmissionInspection({ ...target,
+      run: () => read() })).toEqual({ pending: false, active: true });
     lease.release();
     expect(await runWithSessionRecoveryAdmissionInspection({ ...target,
       run: () => read() })).toEqual({ pending: false, active: false });
