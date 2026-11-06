@@ -25,6 +25,7 @@ export function inspectGatewayRunRecovery(params: {
   chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
   /** Exact-key, read-only storage receipts; absent/failed reads are not empty custody. */
+  pendingInputCustody?: "active" | "unknown";
   pendingInputReceipts?: ReadonlyArray<
     | { runId: string; state: "pending"; cancelled?: true }
     | { runId: string; state: "consumed"; consumedByEventId: string }
@@ -81,8 +82,10 @@ export function inspectGatewayRunRecovery(params: {
   const queuedTurnActive = [...(params.chatQueuedTurns?.values() ?? [])]
     .some(matches);
   // The input owner stores receipts under the exact session key and ID. A
-  // pending receipt proves presence only. Consumed/cancelled/absent receipts do
-  // not prove clear custody. This store does not bind an execution ID or retain
+  // pending receipt proves presence only. The broad owner read also vetoes
+  // another run on the same session incarnation. Neither read shares a durable
+  // epoch with lifecycle admission, so empty still means unknown. This store
+  // does not bind an execution ID or retain
   // the original input ID after final completion, so terminal, lineage, and
   // store revision remain unknown.
   const pendingInputActive = Boolean(observedRunId &&
@@ -174,7 +177,7 @@ export function inspectGatewayRunRecovery(params: {
         params.admissionLockHeld ? { complete: true, state: "clear" } : UNKNOWN,
       followupQueue: queuedTurnActive ? ACTIVE : UNKNOWN,
       laneQueue: queuedCommandActive ? ACTIVE : UNKNOWN,
-      pendingInput: pendingInputActive ? ACTIVE : UNKNOWN,
+      pendingInput: pendingInputActive || params.pendingInputCustody === "active" ? ACTIVE : UNKNOWN,
       descendant: UNKNOWN,
       process: trackedProcessActive ? ACTIVE : UNKNOWN,
       worker: (exactPlacement?.state === "active" || exactPlacement?.state === "draining") &&

@@ -34,7 +34,10 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
-import { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
+import {
+  listSessionPendingInputReceipts,
+  readSessionPendingInputCustody,
+} from "./session-accessor.sqlite-pending-input-receipts.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteScope,
@@ -508,6 +511,15 @@ describe("accepted input custody", () => {
     expect(await queued).toMatchObject({ appended: true, messageId: second.inputId });
     const pendingIds = listSessionPendingInputs(scope()).items.map((input) => input.id);
     expect(pendingIds).toEqual([first.inputId]);
+  });
+
+  it("vetoes unconsumed input from another run and never promotes an empty read", async () => {
+    expect(readSessionPendingInputCustody(scope())).toBe("unknown");
+    const other = await stage("other-run");
+    expect(readSessionPendingInputCustody(scope())).toBe("active");
+    expect(listSessionPendingInputReceipts(scope(), { runIds: ["run-1"] })).toEqual([]);
+    await promote(other);
+    expect(readSessionPendingInputCustody(scope())).toBe("unknown");
   });
 
   it("rolls aggregate append and every source consumption back as one transaction", async () => {

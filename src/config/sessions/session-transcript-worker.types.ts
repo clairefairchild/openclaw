@@ -517,6 +517,7 @@ export type SessionTranscriptWorkerValues = {
   "session-pending-input-receipts": {
     kind: "session-pending-input-receipts";
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
+    custody: "active" | "unknown";
   };
   "session-entry-list": { kind: "session-entry-list"; entries: SessionEntrySummary[] };
   "session-entry-read": SessionEntryReadWorkerResult;
@@ -651,7 +652,10 @@ export type SessionHistoryWorkerDatabase = {
   ) => Promise<ProgressCard | null>;
   readPendingInputReceipts: (
     input: Omit<SessionPendingInputReceiptsWorkerInput, "kind" | "database">,
-  ) => Promise<ReturnType<typeof listSessionPendingInputReceipts>>;
+  ) => Promise<{
+    receipts: ReturnType<typeof listSessionPendingInputReceipts>;
+    custody: "active" | "unknown";
+  }>;
   readUsageCache: (
     input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
   ) => Promise<SessionCostUsageCacheReadResult>;

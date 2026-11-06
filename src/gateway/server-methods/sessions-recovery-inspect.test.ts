@@ -7,7 +7,10 @@ const fixtures = vi.hoisted(() => {
     entry,
     resolvedAgentId: "main",
     visible: true,
-    pendingRead: vi.fn(async (_scope: unknown, _options: unknown) => [] as Array<{ runId: string; state: "pending" }>),
+    pendingRead: vi.fn(async (_scope: unknown, _options: unknown) => ({
+      receipts: [] as Array<{ runId: string; state: "pending" }>,
+      custody: "unknown" as "active" | "unknown",
+    })),
     target: { agentId: "main", canonicalKey: "agent:main:main", storeKey: "agent:main:main",
       storePath: "/test/store", entry },
     full: { agentId: "main", canonicalKey: "agent:main:main",
@@ -49,7 +52,7 @@ beforeEach(() => {
   fixtures.entry.delivery = { kind: "internal" };
   fixtures.visible = true;
   fixtures.pendingRead.mockReset();
-  fixtures.pendingRead.mockResolvedValue([]);
+  fixtures.pendingRead.mockResolvedValue({ receipts: [], custody: "unknown" });
   fixtures.full.store["agent:main:main"] = fixtures.entry;
 });
 
@@ -78,13 +81,15 @@ describe("sessions.recovery.inspect handler", () => {
     fixtures.pendingRead.mockImplementationOnce(async () => {
       fixtures.full.store["agent:main:main"] = { ...fixtures.entry,
         lifecycleRevision: "next-revision" };
-      return [{ runId: "run-1", state: "pending" }];
+      return { receipts: [{ runId: "run-1", state: "pending" }], custody: "active" };
     });
     const response = await invoke(params);
     expect(response.mock.calls[0]?.[0]).toBe(false);
   });
   it("reports only exact pending custody and fails closed on a storage error", async () => {
-    fixtures.pendingRead.mockResolvedValueOnce([{ runId: "run-1", state: "pending" }]);
+    fixtures.pendingRead.mockResolvedValueOnce({
+      receipts: [{ runId: "run-1", state: "pending" }], custody: "active",
+    });
     expect((await invoke(params)).mock.calls[0]?.[1]).toMatchObject({ evidence: {
       pendingInput: { complete: true, state: "active" },
       terminal: { complete: false, state: "unknown" },
@@ -94,10 +99,18 @@ describe("sessions.recovery.inspect handler", () => {
       pendingInput: { complete: false, state: "unknown" },
     } });
   });
+  it("vetoes another run's pending input without leaking its run ID", async () => {
+    fixtures.pendingRead.mockResolvedValueOnce({ receipts: [], custody: "active" });
+    const response = await invoke(params);
+    expect(response.mock.calls[0]?.[1]).toMatchObject({ evidence: {
+      pendingInput: { complete: true, state: "active" },
+    } });
+    expect(JSON.stringify(response.mock.calls)).not.toContain("other-run");
+  });
   it("rejects a caller whose visibility is revoked during the receipt read", async () => {
     fixtures.pendingRead.mockImplementationOnce(async () => {
       fixtures.visible = false;
-      return [];
+      return { receipts: [], custody: "unknown" };
     });
     const response = await invoke(params);
     expect(response.mock.calls[0]?.[0]).toBe(false);
@@ -107,7 +120,7 @@ describe("sessions.recovery.inspect handler", () => {
       fixtures.full.store["agent:main:main"] = {
         ...fixtures.entry, delivery: { kind: "none" },
       };
-      return [];
+      return { receipts: [], custody: "unknown" };
     });
     const response = await invoke(params);
     expect(response.mock.calls[0]?.[0]).toBe(false);

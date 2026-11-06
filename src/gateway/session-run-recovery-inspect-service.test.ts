@@ -307,6 +307,12 @@ describe("read-only run recovery inspection", () => {
         .toEqual({ complete: false, state: "unknown" });
     }
   });
+  it("vetoes pending input from another run without claiming empty proof", () => {
+    expect(inspect({ pendingInputCustody: "active", pendingInputReceipts: [] })
+      .evidence.pendingInput).toEqual({ complete: true, state: "active" });
+    expect(inspect({ pendingInputCustody: "unknown", pendingInputReceipts: [] })
+      .evidence.pendingInput).toEqual({ complete: false, state: "unknown" });
+  });
   it("does not reuse a prior receipt across a changed run or missing read", () => {
     const receipt = [{ runId: "run-1", state: "pending" as const }];
     expect(inspect({ pendingInputReceipts: receipt }).evidence.pendingInput.state).toBe("active");

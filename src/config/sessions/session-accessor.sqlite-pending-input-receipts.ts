@@ -15,6 +15,35 @@ import {
 type PendingInputScope = SessionAccessScope & { agentId: string; sessionId: string };
 const receiptSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
 
+/** Presence across every run for the exact session incarnation. This is not
+ * absence proof: an input may be staged after this read, and the pending-input
+ * owner does not expose an epoch shared with lifecycle admission. */
+export function readSessionPendingInputCustody(
+  scope: PendingInputScope,
+): "active" | "unknown" {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const schema = getAdmittedSqliteSchemaFacts(database.db);
+    const table = schema?.tableSql.get("session_pending_inputs");
+    if (!table || !parseSqliteTableDefinition(table, "session_pending_inputs")
+      .columns.has("consumed_event_id")) {
+      return "unknown" as const;
+    }
+    const rows = executeSqliteQuerySync(
+      database.db,
+      getSessionKysely(database.db)
+        .selectFrom("session_pending_inputs")
+        .select("input_id")
+        .where("session_key", "=", resolved.sessionKey)
+        .where("session_id", "=", scope.sessionId)
+        .where("consumed_event_id", "is", null)
+        .limit(1),
+    ).rows;
+    return rows.length ? "active" as const : "unknown" as const;
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : "unknown";
+}
+
 /** Bounded display reconciliation; these durable correlations never authorize replay. */
 export function listSessionPendingInputReceipts(
   scope: PendingInputScope,

@@ -66,7 +66,7 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
     // The state worker supplies a committed, read-only placement projection.
     // An unavailable store is unknown, never an empty/clear placement.
     let placement: WorkerSessionPlacementRecord | undefined;
-    let pendingInputReceipts: Awaited<ReturnType<typeof readSessionPendingInputReceiptsInWorker>> | undefined;
+    let pendingInputSnapshot: Awaited<ReturnType<typeof readSessionPendingInputReceiptsInWorker>> | undefined;
     try {
       const reply = await executeExistingOpenClawStateRead(
         {},
@@ -80,17 +80,16 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       // Keep the metadata read fail-closed without exposing state-store errors.
     }
     const observedRunId = entry.lifecycleRunId || entry.lastRunId;
-    if (observedRunId) {
+    {
       try {
-        pendingInputReceipts = await readSessionPendingInputReceiptsInWorker({
+        pendingInputSnapshot = await readSessionPendingInputReceiptsInWorker({
           agentId: target.agentId,
           sessionKey: target.canonicalKey,
           sessionId: entry.sessionId,
           storePath: target.storePath,
-        }, { runIds: [observedRunId] });
-      } catch {
-        // An unavailable or ambiguous durable read remains unknown.
-      }
+        }, { runIds: observedRunId ? [observedRunId] : [] });
+    } catch {
+      // An unavailable or ambiguous durable read remains unknown.
     }
     await runWithSessionRecoveryAdmissionInspection({
       scope: target.storePath, sessionKey: target.canonicalKey, sessionId: entry.sessionId,
@@ -144,7 +143,8 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       storePath: target.storePath,
       entry: currentEntry,
       placement,
-      pendingInputReceipts,
+      pendingInputReceipts: pendingInputSnapshot?.receipts,
+      pendingInputCustody: pendingInputSnapshot?.custody,
       admissionLockHeld: true,
       chatAbortControllers: context.chatAbortControllers,
       chatQueuedTurns: context.chatQueuedTurns,

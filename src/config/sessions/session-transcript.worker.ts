@@ -453,10 +453,17 @@ serveOwnedWorkerTasks(
         });
       }
       if (request.kind === "session-pending-input-receipts") {
-        const { listSessionPendingInputReceipts } =
+        const { listSessionPendingInputReceipts, readSessionPendingInputCustody } =
           await import("./session-accessor.sqlite-pending-input-receipts.js");
         return await withHistoryDatabase(request.database, request.kind, () => ({
           kind: "session-pending-input-receipts" as const,
+          custody: readSessionPendingInputCustody({
+            agentId: request.agentId,
+            sessionKey: request.sessionKey,
+            sessionId: request.sessionId,
+            storePath: request.database.path,
+            env: cloneEnvWithPlatformSemantics(request.env),
+          }),
           receipts: listSessionPendingInputReceipts(
             {
               agentId: request.agentId,

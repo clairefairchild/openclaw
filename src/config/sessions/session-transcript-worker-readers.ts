@@ -272,7 +272,7 @@ export function createSessionHistoryWorkerReaders(
       "session-pending-input-receipts",
       "pending input receipts",
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
-      (value) => value.receipts,
+      (value) => ({ receipts: value.receipts, custody: value.custody ?? "unknown" }),
     ),
     readEntryResult: reader(
       "session-entry-read",
