@@ -18,7 +18,7 @@ export function inspectGatewayRunRecovery(params: {
   agentId: string;
   key: string;
   storePath: string;
-  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery" | "runRecoveryTerminalReceipt" | "runRecoveryOriginalInputReceipt">>;
+  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery" | "runRecoveryTerminalReceipt" | "runRecoveryOriginalInputReceipt" | "runRecoverySourceRouteReceipt">>;
   placement?: WorkerSessionPlacementRecord;
   chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
