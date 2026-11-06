@@ -397,6 +397,7 @@ function drainLane(
             taskId,
             generation: taskGeneration,
           });
+          await entry.onTaskSuccess?.({ lane, taskId, generation: taskGeneration });
           const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
           if (completedCurrentGeneration) {
             diag.debug(
@@ -570,6 +571,7 @@ export function enqueueCommandInLane<T>(
       taskTimeoutAbortGraceMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
+      onTaskSuccess: opts?.onTaskSuccess,
     };
     enqueueLaneEntry(state, entry);
     const signal = opts?.abortSignal;

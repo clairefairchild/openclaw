@@ -24,12 +24,16 @@ export async function enqueueCommandInLaneWithRecoveryCustody<T>(
     return await enqueueCommandInLane(lane, async (marker) => {
       startAttempted = true;
       await broker.start(custody.workId);
-      const result = await task(marker);
-      if (isCommandLaneTaskMarkerCurrent(marker)) {
-        await broker.settle(custody.workId, `completed:${custody.workId}`);
-      }
-      return result;
-    }, opts);
+      return await task(marker);
+    }, {
+      ...opts,
+      onTaskSuccess: async (marker) => {
+        await opts?.onTaskSuccess?.(marker);
+        if (isCommandLaneTaskMarkerCurrent(marker)) {
+          await broker.settle(custody.workId, `completed:${custody.workId}`);
+        }
+      },
+    });
   } catch (error) {
     // No dequeue/start attempt means the queue itself rejected the reservation.
     // Once start is attempted, even a transport error is an ambiguous outcome.

@@ -54,6 +54,8 @@ export type CommandQueueEnqueueOptions = {
   onQueued?: () => void;
   warnAfterMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  /** Runs after the timeout race resolves successfully, before lane completion. */
+  onTaskSuccess?: (marker: Readonly<{ lane: string; taskId: number; generation: number }>) => Promise<void>;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
   /** Replaces idle timing with an owner deadline; undefined restores idle timing. */

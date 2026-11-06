@@ -81,6 +81,25 @@ it("leaves failed and reset-generation tasks unresolved for reconciliation", asy
   expect(broker.settle).not.toHaveBeenCalled();
 });
 
+it("does not settle when the queue times out before the task unwinds", async () => {
+  const { lane, workId } = next();
+  const release = new AbortController();
+  const gate = createDeferredCore<void>();
+  const started = createDeferredCore<void>();
+  const running = enqueueCommandInLaneWithRecoveryCustody(
+    lane,
+    async () => { started.resolve(undefined); await gate.promise; return "late"; },
+    custody(workId),
+    { taskTimeoutMs: 60_000, taskTimeoutReleaseSignal: release.signal },
+  );
+  await started.promise;
+  release.abort();
+  await expect(running).rejects.toThrow(/timed out/);
+  gate.resolve(undefined);
+  await Promise.resolve();
+  expect(broker.settle).not.toHaveBeenCalled();
+});
+
 it("never publishes after an ambiguous reserve result", async () => {
   const { lane, workId } = next();
   broker.reserve.mockRejectedValueOnce(new Error("broker acknowledgement lost"));

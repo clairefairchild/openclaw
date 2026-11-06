@@ -33,6 +33,7 @@ export type QueueEntry = {
   taskTimeoutAbortGraceMs?: number;
   taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
+  onTaskSuccess?: CommandQueueEnqueueOptions["onTaskSuccess"];
   releaseQueuedAbort?: () => void;
 };
 
