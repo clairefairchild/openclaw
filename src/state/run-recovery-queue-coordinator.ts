@@ -159,10 +159,11 @@ export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync, author
 
 export function readRecoveryQueueIncarnation(db: DatabaseSync): string {
   const rows = db.prepare("SELECT incarnation FROM recovery_queue_meta").all() as MetaRow[]; // sqlite-allow-raw -- Exact singleton identity.
-  if (rows.length !== 1 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(rows[0].incarnation)) {
+  const [row] = rows;
+  if (!row || rows.length !== 1 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(row.incarnation)) {
     throw new Error("Recovery queue coordinator identity is missing or invalid");
   }
-  return rows[0].incarnation;
+  return row.incarnation;
 }
 
 function assertRecoveryQueueLedgerKnown(db: DatabaseSync): void {
