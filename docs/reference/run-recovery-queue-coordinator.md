@@ -79,7 +79,13 @@ The prior Vitest `SqliteWorkerError` is not evidence that embedded Gateway
 execution runs in an application Worker. Vitest runs these unit suites in a
 Worker. Source placement review of the production `.worker.ts` entrypoints
 found no import or call to `runEmbeddedAgent`, the embedded orchestrator,
-lane controller, command queue, or background-work owner. The worker-creation
+lane controller, command queue, or background-work owner. The three Worker
+entrypoints with five agent-package imports are cron run admission, session delivery,
+and state reads; they import lifecycle, completion-admission, and SQLite/read
+kernels, not embedded execution. The Gateway reply caller
+`agent-runner-embedded-candidate.ts`, cron caller
+`isolated-agent/run-executor.ts`, and Gateway consult/companion callers reach
+the orchestrator on their host path, with no Worker transfer at those entrypoints. The worker-creation
 owner `src/infra/worker-cpu.ts` only creates the explicit task workers; it does
 not transfer Gateway reply, cron, or embedded execution into one. Gateway
 reply/agent-turn and cron isolated-agent callers invoke embedded execution from

@@ -125,6 +125,7 @@ describe("embedded run session lane", () => {
         expect(observedOptions?.taskIdentity).toEqual({
           taskKind: trigger === "cron" ? "cron" : "spawn",
           sessionKey: "agent:example:subagent:child",
+          sessionId: "child-run",
           runId: "child-run",
           requesterSessionKey: "agent:example:main",
         });
@@ -245,7 +246,8 @@ describe("embedded run session lane", () => {
       await interveningGlobalTaskStarted.promise;
       await delay(75);
       await expectLaneCounts(sessionLane, 1, 0);
-      await expectLaneCounts(globalLane, 1, 1);
+      // The direct test task publishes before the broker-reserved global tasks.
+      await expectLaneCounts(globalLane, 1, 2);
 
       interveningGlobalGate.resolve();
       await expect(run).resolves.toEqual([
