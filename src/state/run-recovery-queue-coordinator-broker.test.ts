@@ -34,6 +34,7 @@ try {
   const read = new DatabaseSync(databasePath);
   assert.equal(read.prepare('SELECT state FROM recovery_queue_reservations WHERE work_id = ?')
     .get(work.workId)?.state, 'queued');
+  assert.equal(read.prepare('SELECT COUNT(*) AS count FROM recovery_queue_cutovers').get().count, 0);
   read.close();
   await first.close();
   const second = await openRecoveryQueueCoordinatorBroker(databasePath);
@@ -50,6 +51,9 @@ try {
       .run(randomUUID());
     db.close();
     await assert.rejects(second.reserve({ ...work, workId: 'later' }), /incarnation changed/);
+    const after = new DatabaseSync(databasePath);
+    assert.equal(after.prepare('SELECT COUNT(*) AS count FROM recovery_queue_cutovers').get().count, 0);
+    after.close();
   } finally { await second.close(); }
 } finally { await first.close(); }
 process.stdout.write('ok');

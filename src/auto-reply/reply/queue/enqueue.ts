@@ -8,7 +8,7 @@ import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { openRecoveryQueueCoordinatorBroker } from "../../../state/run-recovery-queue-coordinator-broker.js";
+import { getRecoveryQueueCoordinatorBroker } from "../../../state/run-recovery-queue-coordinator-broker.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -229,7 +229,6 @@ export function enqueueFollowupRun(
 
 // Keep a single process-owned broker and stable work identity for each source.
 // An ambiguous reservation or publication stays unresolved and fails closed.
-let ingressBroker: ReturnType<typeof openRecoveryQueueCoordinatorBroker> | undefined;
 const ingressWorkIds = new WeakMap<FollowupRun, string>();
 
 export async function enqueueFollowupWithRecoveryReservation(
@@ -241,8 +240,7 @@ export async function enqueueFollowupWithRecoveryReservation(
   restartIfIdle = true,
   options: EnqueueFollowupRunOptions = {},
 ): Promise<boolean> {
-  ingressBroker ??= openRecoveryQueueCoordinatorBroker();
-  const broker = await ingressBroker;
+  const broker = await getRecoveryQueueCoordinatorBroker();
   let workId = ingressWorkIds.get(run);
   if (!workId) {
     workId = randomUUID();

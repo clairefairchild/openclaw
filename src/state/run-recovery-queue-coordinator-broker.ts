@@ -70,3 +70,11 @@ export async function openRecoveryQueueCoordinatorBroker(
     },
   };
 }
+
+// All queue producers in a Gateway share one physical owner and worker.
+// A rejected open is retained: retrying an uncertain open could bypass custody.
+let sharedBroker: ReturnType<typeof openRecoveryQueueCoordinatorBroker> | undefined;
+export function getRecoveryQueueCoordinatorBroker() {
+  sharedBroker ??= openRecoveryQueueCoordinatorBroker();
+  return sharedBroker;
+}
