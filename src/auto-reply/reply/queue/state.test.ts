@@ -5,6 +5,7 @@ import {
   clearFollowupQueue,
   clearRemovedQueuedAuthProfiles,
   getFollowupQueue,
+  hasFollowupQueueForRecoverySession,
   hasPendingFollowupQueueWork,
   refreshQueuedFollowupSession,
 } from "./state.js";
@@ -34,6 +35,37 @@ function makeRun(): FollowupRun["run"] {
     blockReplyBreak: "message_end",
   };
 }
+
+describe("run recovery followup presence", () => {
+  const otherKey = "agent:main:dm:other";
+  const source = (sessionId: string, sessionKey = QUEUE_KEY): FollowupRun => ({
+    prompt: "pending message", enqueuedAt: 1,
+    run: { ...makeRun(), sessionId, sessionKey },
+  });
+  afterEach(() => clearFollowupQueue(otherKey));
+
+  it("vetoes queued, in-flight, and draining work on the exact key across incarnations", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "session-1")).toBe(false);
+    queue.items.push(source("older-session"));
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "session-1")).toBe(true);
+    const inFlight = queue.items.pop()!;
+    queue.inFlight.add(inFlight);
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "session-1")).toBe(true);
+    queue.inFlight.clear();
+    queue.draining = true;
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "session-1")).toBe(true);
+  });
+
+  it("vetoes an attributable source on another queue but not a different incarnation", () => {
+    const queue = getFollowupQueue(otherKey, { mode: "followup" });
+    queue.items.push(source("session-1"));
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "session-1")).toBe(true);
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "new-session")).toBe(false);
+    queue.items.length = 0;
+    expect(hasFollowupQueueForRecoverySession(QUEUE_KEY, "session-1")).toBe(false);
+  });
+});
 
 describe("clearRemovedQueuedAuthProfiles", () => {
   it("releases removed accounts in every queued source without replacing newer choices", () => {

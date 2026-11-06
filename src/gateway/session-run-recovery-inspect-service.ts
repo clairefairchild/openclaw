@@ -5,6 +5,7 @@ import type { WorkerSessionPlacementRecord } from "./worker-environments/placeme
 import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
 import { readSessionRecoveryAdmissionSnapshot } from "../sessions/session-lifecycle-admission.js";
 import { fingerprintRunRecoverySourceRoute } from "../config/sessions/run-recovery-source-route.js";
+import { hasFollowupQueueForRecoverySession } from "../auto-reply/reply/queue/state.js";
 import { hasQueuedCommandForRecoverySession } from "../process/command-queue.state.js";
 import { hasTrackedProcessForRecoverySession } from "../agents/bash-process-registry.js";
 
@@ -42,6 +43,7 @@ export function inspectGatewayRunRecovery(params: {
   /** Set only by the lifecycle owner after acquiring both identity locks. */
   admissionLockHeld?: boolean;
   readQueuedCommand?: typeof hasQueuedCommandForRecoverySession;
+  readFollowupQueue?: typeof hasFollowupQueueForRecoverySession;
   readTrackedProcess?: typeof hasTrackedProcessForRecoverySession;
 }): SessionsRecoveryInspectResult {
   const { agentId, key, entry } = params;
@@ -67,6 +69,8 @@ export function inspectGatewayRunRecovery(params: {
   const admissions = (params.readAdmissions ?? readSessionRecoveryAdmissionSnapshot)({
     scope: params.storePath, sessionKey: key, sessionId: entry.sessionId,
   });
+  const followupQueueActive = (params.readFollowupQueue ??
+    hasFollowupQueueForRecoverySession)(key, entry.sessionId);
   const queuedCommandActive = (params.readQueuedCommand ??
     hasQueuedCommandForRecoverySession)(key);
   const trackedProcessActive = (params.readTrackedProcess ??
@@ -178,7 +182,7 @@ export function inspectGatewayRunRecovery(params: {
         directControllerActive ? ACTIVE : UNKNOWN,
       pendingAdmission: admissions.pending || admissions.active ? ACTIVE :
         params.admissionLockHeld ? { complete: true, state: "clear" } : UNKNOWN,
-      followupQueue: queuedTurnActive ? ACTIVE : UNKNOWN,
+      followupQueue: queuedTurnActive || followupQueueActive ? ACTIVE : UNKNOWN,
       laneQueue: queuedCommandActive ? ACTIVE : UNKNOWN,
       pendingInput: pendingInputActive || params.pendingInputCustody === "active" ? ACTIVE : UNKNOWN,
       descendant: UNKNOWN,

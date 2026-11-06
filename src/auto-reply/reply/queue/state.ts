@@ -92,6 +92,27 @@ export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>):
   return false;
 }
 
+/** Presence-only recovery veto. A queue keyed to this session is unsafe even
+ * when its sources have no marker or belong to an older incarnation. Other
+ * queue keys require exact source attribution. No empty result proves clear. */
+export function hasFollowupQueueForRecoverySession(sessionKey: string, sessionId: string): boolean {
+  for (const [key, queue] of FOLLOWUP_QUEUES) {
+    const sources = [...followupQueueSources(queue), ...queue.inFlight];
+    const occupied = sources.length > 0 || queue.draining || queue.droppedCount > 0;
+    if (!occupied) {
+      continue;
+    }
+    if (key === sessionKey || key === sessionId) {
+      return true;
+    }
+    if (sources.some((source) =>
+      source.run.sessionKey === sessionKey && source.run.sessionId === sessionId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 type SummaryElisionCapState = Pick<
   FollowupQueueState,
   "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"

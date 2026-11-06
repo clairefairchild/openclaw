@@ -134,6 +134,7 @@ function getLaneState(lane: string): LaneState {
     lane,
     queue: createLaneQueue(),
     activeTaskIds: new Set(),
+    activeTaskIdentities: new Map(),
     maxConcurrent: getDefaultLaneConcurrency(lane),
     draining: false,
     generation: 0,
@@ -147,6 +148,7 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
     return false;
   }
   state.activeTaskIds.delete(taskId);
+  state.activeTaskIdentities.delete(taskId);
   return true;
 }
 
@@ -372,6 +374,7 @@ function drainLane(
       // synchronously re-enter the queue, and the shared budget must already
       // account for this task when that nested admission is evaluated.
       state.activeTaskIds.add(taskId);
+      state.activeTaskIdentities.set(taskId, entry.taskIdentity);
       started += 1;
       if (waitedMs >= entry.warnAfterMs) {
         try {
@@ -694,6 +697,7 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   const released = state.activeTaskIds.size;
   state.generation += 1;
   state.activeTaskIds.clear();
+  state.activeTaskIdentities.clear();
   state.draining = false;
   // Clearing activeTaskIds may release multiple shared slots. Re-arbitrate the
   // whole group so the reset lane cannot reclaim them ahead of older siblings.
@@ -712,6 +716,7 @@ export function resetAllLanes(): void {
   for (const state of queueState.lanes.values()) {
     state.generation += 1;
     state.activeTaskIds.clear();
+    state.activeTaskIdentities.clear();
     state.draining = false;
     if (state.queue.length > 0) {
       lanesToDrain.push(state.lane);

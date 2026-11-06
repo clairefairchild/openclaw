@@ -345,6 +345,29 @@ describe("read-only run recovery inspection", () => {
     expect(inspect({ chatQueuedTurns: new Map() }).evidence.followupQueue)
       .toEqual({ complete: false, state: "unknown" });
   });
+  it("vetoes followup owner presence but keeps an empty owner unknown", () => {
+    expect(inspect({ readFollowupQueue: (key, sessionId) =>
+      key === "agent:main:main" && sessionId === "s1" }).evidence.followupQueue)
+      .toEqual({ complete: true, state: "active" });
+    expect(inspect({ readFollowupQueue: () => false }).evidence.followupQueue)
+      .toEqual({ complete: false, state: "unknown" });
+  });
+  it("vetoes marked active work outside the exact session lane", async () => {
+    const lane = "recovery-active-other-lane";
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const task = enqueueCommandInLane(lane, async () => { await gate; }, {
+      taskIdentity: { taskKind: "turn", sessionKey: "agent:main:main",
+        sessionId: "s1", runId: "run-1" },
+    });
+    try {
+      expect(inspect().evidence.laneQueue).toEqual({ complete: true, state: "active" });
+    } finally {
+      release();
+      await task;
+    }
+    expect(inspect().evidence.laneQueue).toEqual({ complete: false, state: "unknown" });
+  });
   it("vetoes unmarked work on the exact session lane and marked work elsewhere", async () => {
     const sessionLane = "session:agent:main:main";
     const otherLane = "recovery-queue-veto-test";
