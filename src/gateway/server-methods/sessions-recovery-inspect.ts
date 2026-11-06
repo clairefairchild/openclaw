@@ -4,6 +4,7 @@ import {
   validateSessionsRecoveryInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
+import { fingerprintRunRecoverySourceRoute } from "../../config/sessions/run-recovery-source-route.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import { inspectGatewayRunRecovery } from "../session-run-recovery-inspect-service.js";
@@ -92,19 +93,23 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
     }
     // Authorization and the session row may change while awaiting the worker.
     sessionMutationAuthorization?.assertCurrent();
-    const refreshedSharing = resolveSessionSharingTarget({ cfg: context.getRuntimeConfig(),
+    const currentCfg = context.getRuntimeConfig();
+    const refreshedSharing = resolveSessionSharingTarget({ cfg: currentCfg,
       sessionKey: params.key, agentId: resolved.agentId });
     if (!refreshedSharing || refreshedSharing.agentId !== target.agentId ||
         refreshedSharing.canonicalKey !== target.canonicalKey ||
         refreshedSharing.storePath !== target.storePath ||
         refreshedSharing.entry.sessionId !== target.entry.sessionId ||
         authorizeIncognitoSessionTarget({ client: client ?? null,
-          sessionKey: params.key, target: refreshedSharing })) {
+          sessionKey: params.key, target: refreshedSharing }) ||
+        createSessionListEntryFilter({ client: client ?? null,
+          cfg: context.getCommittedRuntimeConfig?.() ?? currentCfg })?.(
+            refreshedSharing.storeKey, refreshedSharing.entry) === false) {
       respond(false, undefined, notFound);
       return;
     }
     const refreshed = resolveGatewaySessionStoreTargetWithStore({
-      cfg, key: target.canonicalKey, agentId: target.agentId,
+      cfg: currentCfg, key: target.canonicalKey, agentId: target.agentId,
       exactRead: true, readOnly: true, readConsistency: "latest",
     });
     const currentEntry = refreshed.store[target.storeKey];
@@ -114,6 +119,7 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
         currentEntry.lifecycleRevision !== entry.lifecycleRevision ||
         currentEntry.lifecycleRunId !== entry.lifecycleRunId ||
         currentEntry.lastRunId !== entry.lastRunId ||
+        JSON.stringify(currentEntry.delivery) !== JSON.stringify(entry.delivery) ||
         JSON.stringify(currentEntry.runRecoveryTerminalReceipt) !==
           JSON.stringify(entry.runRecoveryTerminalReceipt) ||
         JSON.stringify(currentEntry.runRecoveryOriginalInputReceipt) !==
@@ -123,10 +129,11 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
         JSON.stringify(currentEntry.mainRestartRecovery) !== JSON.stringify(entry.mainRestartRecovery) ||
         JSON.stringify(currentEntry.restartRecoveryRuns) !== JSON.stringify(entry.restartRecoveryRuns) ||
         createSessionListEntryFilter({ client: client ?? null,
-          cfg: context.getCommittedRuntimeConfig?.() ?? cfg })?.(target.storeKey, currentEntry) === false) {
+          cfg: context.getCommittedRuntimeConfig?.() ?? currentCfg })?.(target.storeKey, currentEntry) === false) {
       respond(false, undefined, notFound);
       return;
     }
+    const sourceRouteDigest = fingerprintRunRecoverySourceRoute(currentEntry.delivery);
     const result = inspectGatewayRunRecovery({
       agentId: target.agentId,
       key: target.canonicalKey,
@@ -136,6 +143,11 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       pendingInputReceipts,
       chatAbortControllers: context.chatAbortControllers,
       chatQueuedTurns: context.chatQueuedTurns,
+      ...(sourceRouteDigest
+        ? { sourceRouteAuthorization: {
+            agentId: target.agentId, key: target.canonicalKey,
+            sessionId: currentEntry.sessionId, deliveryDigest: sourceRouteDigest,
+          } } : {}),
     });
     // Exact run selection never falls back to another run sharing the key.
     if (params.runId && result.runId !== params.runId) {

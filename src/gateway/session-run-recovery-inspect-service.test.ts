@@ -180,6 +180,24 @@ describe("read-only run recovery inspection", () => {
       metadataCompleteness: { store: true, route: true },
       evidence: { sourceRoute: { complete: false, state: "unknown" } },
     });
+    const authorized = { agentId: "main", key: "agent:main:main",
+      sessionId: "s1", deliveryDigest: digest };
+    expect(inspect({ entry: bound, sourceRouteAuthorization: authorized })
+      .evidence.sourceRoute).toEqual({ complete: true, state: "clear" });
+    for (const wrong of [
+      { ...authorized, agentId: "other" },
+      { ...authorized, key: "agent:other:main" },
+      { ...authorized, sessionId: "other-session" },
+      { ...authorized, deliveryDigest: "rebound-route" },
+    ]) {
+      expect(inspect({ entry: bound, sourceRouteAuthorization: wrong })
+        .evidence.sourceRoute).toEqual({ complete: false, state: "unknown" });
+    }
+    expect(inspect({ entry: { ...bound, delivery: { kind: "external",
+      route: { channel: "webchat", target: { to: "other" } },
+      context: { channel: "webchat", to: "other" }, origin: {} } },
+      sourceRouteAuthorization: authorized }).evidence.sourceRoute)
+      .toEqual({ complete: false, state: "unknown" });
     for (const changed of [
       { ...bound, delivery: { kind: "none" as const } },
       { ...bound, sessionId: "replacement" },

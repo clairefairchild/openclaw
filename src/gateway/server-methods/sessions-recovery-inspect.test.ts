@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => {
   const entry = { sessionId: "s1", lifecycleRevision: "r1", updatedAt: 1,
-    lifecycleRunId: "run-1", pluginExtensions: { secret: { value: "private-content" } } };
+    lifecycleRunId: "run-1", delivery: { kind: "internal" }, pluginExtensions: { secret: { value: "private-content" } } };
   return {
     entry,
     resolvedAgentId: "main",
@@ -46,6 +46,7 @@ async function invoke(params: Record<string, unknown>) {
 
 beforeEach(() => {
   fixtures.resolvedAgentId = "main";
+  fixtures.entry.delivery = { kind: "internal" };
   fixtures.visible = true;
   fixtures.pendingRead.mockReset();
   fixtures.pendingRead.mockResolvedValue([]);
@@ -92,6 +93,31 @@ describe("sessions.recovery.inspect handler", () => {
     expect((await invoke(params)).mock.calls[0]?.[1]).toMatchObject({ evidence: {
       pendingInput: { complete: false, state: "unknown" },
     } });
+  });
+  it("rejects a caller whose visibility is revoked during the receipt read", async () => {
+    fixtures.pendingRead.mockImplementationOnce(async () => {
+      fixtures.visible = false;
+      return [];
+    });
+    const response = await invoke(params);
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+  });
+  it("rejects an original route rebound during the receipt read", async () => {
+    fixtures.pendingRead.mockImplementationOnce(async () => {
+      fixtures.full.store["agent:main:main"] = {
+        ...fixtures.entry, delivery: { kind: "none" },
+      };
+      return [];
+    });
+    const response = await invoke(params);
+    expect(response.mock.calls[0]?.[0]).toBe(false);
+  });
+  it("keeps a missing original route unknown", async () => {
+    const response = await invoke(params);
+    expect(response.mock.calls[0]?.[0]).toBe(true);
+    expect(response.mock.calls[0]?.[1]).toMatchObject({
+      evidence: { sourceRoute: { complete: false, state: "unknown" } },
+    });
   });
   it("returns only bounded metadata", async () => {
     const response = await invoke(params);

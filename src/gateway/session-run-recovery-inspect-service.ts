@@ -27,6 +27,13 @@ export function inspectGatewayRunRecovery(params: {
     | { runId: string; state: "pending"; cancelled?: true }
     | { runId: string; state: "consumed"; consumedByEventId: string }
   >;
+  /** Caller-visible, exact original route, revalidated by the RPC handler. */
+  sourceRouteAuthorization?: Readonly<{
+    agentId: string;
+    key: string;
+    sessionId: string;
+    deliveryDigest: string;
+  }>;
   readRunOwners?: typeof readAgentRunRecoveryOwnerSnapshot;
   readAdmissions?: typeof readSessionRecoveryAdmissionSnapshot;
 }): SessionsRecoveryInspectResult {
@@ -117,6 +124,13 @@ export function inspectGatewayRunRecovery(params: {
     route.sourceRouteGeneration.length > 0 &&
     typeof route.storeRevision === "string" && route.storeRevision.length > 0 &&
     route.deliveryDigest === fingerprintRunRecoverySourceRoute(entry.delivery);
+  // A persisted digest establishes identity, not caller or channel authority.
+  // External routes have no live authorization owner here and remain unknown.
+  const routeAuthorized = Boolean(routeBound && entry.delivery?.kind === "internal" &&
+    params.sourceRouteAuthorization?.agentId === agentId &&
+    params.sourceRouteAuthorization.key === key &&
+    params.sourceRouteAuthorization.sessionId === entry.sessionId &&
+    params.sourceRouteAuthorization.deliveryDigest === route?.deliveryDigest);
   return {
     agentId,
     key,
@@ -154,7 +168,7 @@ export function inspectGatewayRunRecovery(params: {
       process: UNKNOWN,
       worker: UNKNOWN,
       terminal: terminalBound ? { complete: true, state: "clear" } : UNKNOWN,
-      sourceRoute: UNKNOWN,
+      sourceRoute: routeAuthorized ? { complete: true, state: "clear" } : UNKNOWN,
       inputLineage: inputBound ? { complete: true, state: "clear" } : UNKNOWN,
       delivery: UNKNOWN,
       progress: UNKNOWN,
