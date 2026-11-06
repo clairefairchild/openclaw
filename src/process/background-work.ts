@@ -1,5 +1,6 @@
 import { getLaneGroup } from "./command-queue.capacity-groups.js";
-import { enqueueCommandInLane, publishLaneConfiguration } from "./command-queue.js";
+import { publishLaneConfiguration } from "./command-queue.js";
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody } from "./command-queue.recovery-custody.js";
 import { getQueueState } from "./command-queue.state.js";
 import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";
@@ -59,7 +60,7 @@ export function createBackgroundWorkOwner(params: { owner: string; maxConcurrent
       const signal = options?.abortSignal
         ? AbortSignal.any([restartSignal, options.abortSignal])
         : restartSignal;
-      return enqueueCommandInLane(
+      return enqueueCommandInLaneWithGeneratedRecoveryCustody(
         register(),
         () => {
           signal.throwIfAborted();

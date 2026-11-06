@@ -1,5 +1,15 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+// Unit queue behavior uses an inert ledger; the real broker is exercised in a
+// separate main-thread process, because Vitest runs these files in a Worker.
+vi.mock("../../../state/run-recovery-queue-coordinator-broker.js", () => ({
+  getRecoveryQueueCoordinatorBroker: async () => ({
+    reserve: async () => "reserved",
+    start: async () => "started",
+    settle: async () => "settled",
+  }),
+}));
+
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {

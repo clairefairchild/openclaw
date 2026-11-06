@@ -1,5 +1,15 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+// Unit queue behavior uses an inert ledger; the real broker is exercised in a
+// separate main-thread process, because Vitest runs these files in a Worker.
+vi.mock("../../../state/run-recovery-queue-coordinator-broker.js", () => ({
+  getRecoveryQueueCoordinatorBroker: async () => ({
+    reserve: async () => "reserved",
+    start: async () => "started",
+    settle: async () => "settled",
+  }),
+}));
+
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   getAgentEventLifecycleGeneration,

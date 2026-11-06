@@ -13,10 +13,10 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import {
-  enqueueCommandInLane,
   getCommandLaneSnapshot,
   isCommandLaneTaskTimeoutError,
 } from "../../../process/command-queue.js";
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody } from "../../../process/command-queue.recovery-custody.js";
 import type {
   CommandQueueEnqueueOptions,
   CommandQueueTaskDeadline,
@@ -289,7 +289,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     );
     return params.enqueue
       ? params.enqueue(task, queueOptions)
-      : enqueueCommandInLane(lane, task, queueOptions);
+      : enqueueCommandInLaneWithGeneratedRecoveryCustody(lane, task, queueOptions);
   };
   const rethrowQueueError = (error: unknown): never => {
     if (isCommandLaneTaskTimeoutError(error)) {

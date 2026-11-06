@@ -75,15 +75,18 @@ bridge starts before task effects, settles definitive pre-start rejection and
 successful current-generation task completion, and retains failure, timeout,
 reset, lost acknowledgment, or stale completion for reconciliation.
 
-The broader production caller migration is **blocked**. An exact-source caller
-suite showed embedded agent lane admission executes in an application worker.
-That worker cannot open the coordinator's SQLite store: the host broker
-connection is required, and `openSqliteWorkerStore` explicitly refuses a
-non-main-thread open. Do not mock, bypass, or weaken that boundary. Embedded
-run, compaction, session placement, context-engine maintenance, and generic
-background-work callers therefore remain on the original command lane until a
-reviewed worker-to-host coordinator route is available. The isolated source
-branch is not a deployable complete cutover.
+The prior Vitest `SqliteWorkerError` is not evidence that embedded Gateway
+execution runs in an application Worker. Vitest runs these unit suites in a
+Worker. Source placement review of the production `.worker.ts` entrypoints
+found no import or call to `runEmbeddedAgent`, the embedded orchestrator,
+lane controller, command queue, or background-work owner. The worker-creation
+owner `src/infra/worker-cpu.ts` only creates the explicit task workers; it does
+not transfer Gateway reply, cron, or embedded execution into one. Gateway
+reply/agent-turn and cron isolated-agent callers invoke embedded execution from
+their host runtime. Thus the host broker may be used at those callers without a
+speculative worker-to-host transport. The native store's non-main-thread guard
+remains in place. A dynamic plugin's execution context is not established by
+this static review and is not treated as cut over.
 
 No command-lane producer marker is written. Pre-existing in-memory queue work
 at a future deployment boundary has no durable work ID and cannot be cleared
@@ -91,3 +94,24 @@ from an empty snapshot after restart. Its authoritative owner receipts, as
 well as abort, clear, group drain, timeout, and downstream terminal receipts,
 need reconciliation before the marker can be set. Retain all unresolved ledger
 rows for exact-ID review. Recovery remains held with `queue_not_cut_over`.
+
+## Stage 10 host embedded and background ingress (source only, marker off)
+
+The embedded lane controller and generic background-work owner now use the
+existing guarded command-lane bridge for their ordinary queue path. Each
+submission mints one UUID work ID, reserves conservative global `unmarked`
+custody before publication, starts before task effects, and settles only the
+bridge's authoritative current-generation success or definitive pre-start
+rejection. Injected test/custom enqueues are not silently claimed as migrated.
+The lane unit fixtures mock only the broker; a separate main-thread subprocess
+exercises the actual embedded session lane, native broker, and persisted
+queued/in-flight/settled transitions. No speculative worker host bridge is
+installed.
+
+Other direct command-lane producers, including compaction and deferred context
+engine maintenance, remain on their old path. Their host placement and terminal
+custody need a separate scoped migration. Preexisting in-memory work, injected
+enqueues, ambiguous or failed tasks, timeout/abort/clear/group drain, and
+followup accepted-input reconciliation remain unresolved. Both cutover markers
+stay off, so recovery remains `queue_not_cut_over`. No live deployment, restart,
+ledger mutation, or recovery send is authorized by this source checkpoint.

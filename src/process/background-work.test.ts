@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Queue/group unit behavior uses a broker stub; real host access is subprocess-tested.
+vi.mock("../state/run-recovery-queue-coordinator-broker.js", () => ({
+  getRecoveryQueueCoordinatorBroker: async () => ({
+    reserve: async () => "reserved",
+    start: async () => "started",
+    settle: async () => "settled",
+  }),
+}));
+
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createBackgroundWorkOwner, getBackgroundWorkSnapshot } from "./background-work.js";
 import {

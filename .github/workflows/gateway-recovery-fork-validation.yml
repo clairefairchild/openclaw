@@ -36,6 +36,14 @@ jobs:
         run: >-
           pnpm test
           src/process/command-queue.recovery-custody.test.ts
+          src/process/background-work.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.attempt-controls.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.group-wait.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.lifecycle.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.queue-liveness.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.writer-claim.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.main-thread-broker.test.ts
           src/process/command-queue.test.ts
           src/gateway/server-methods/system-agent-concurrency.test.ts
           src/cron/service.wake-now-real-heartbeat.test.ts
