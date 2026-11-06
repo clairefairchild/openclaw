@@ -71,6 +71,7 @@ import {
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { fingerprintRunRecoverySourceRoute } from "./run-recovery-source-route.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
@@ -417,6 +418,8 @@ export async function stageSessionPendingInput(
               prior.sessionId === scope.sessionId &&
               prior.runId === options.runId &&
               prior.lifecycleRevision === session.lifecycleRevision;
+            const inputGeneration = randomUUID();
+            const deliveryDigest = fingerprintRunRecoverySourceRoute(session.delivery);
             writeSessionEntry(current, resolved.sessionKey, {
               ...session,
               runRecoveryOriginalInputReceipt: sameRun
@@ -429,7 +432,24 @@ export async function stageSessionPendingInput(
                       lifecycleRevision: session.lifecycleRevision,
                       lifecycleGeneration,
                       inputId,
-                      inputGeneration: randomUUID(),
+                      inputGeneration,
+                    }
+                  : undefined,
+              runRecoverySourceRouteReceipt: sameRun
+                ? session.runRecoverySourceRouteReceipt
+                  ? { ...session.runRecoverySourceRouteReceipt, invalidated: true }
+                  : undefined
+                : session.lifecycleRevision && deliveryDigest
+                  ? {
+                      sessionKey: resolved.sessionKey,
+                      sessionId: scope.sessionId,
+                      runId: options.runId,
+                      lifecycleRevision: session.lifecycleRevision,
+                      lifecycleGeneration,
+                      inputGeneration,
+                      sourceRouteGeneration: randomUUID(),
+                      storeRevision: randomUUID(),
+                      deliveryDigest,
                     }
                   : undefined,
             }, { previousEntry: session });

@@ -15,6 +15,7 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { fingerprintRunRecoverySourceRoute } from "../config/sessions/run-recovery-source-route.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -83,6 +84,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "lifecycleRunId"
   | "runRecoveryTerminalReceipt"
   | "runRecoveryOriginalInputReceipt"
+  | "runRecoverySourceRouteReceipt"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
@@ -522,6 +524,18 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           input.lifecycleRevision === entry.lifecycleRevision &&
           input.lifecycleGeneration === params.event.lifecycleGeneration &&
           input.inputId && input.inputGeneration ? input : undefined;
+        const route = entry.runRecoverySourceRouteReceipt;
+        const exactRoute = exactInput && route && !route.invalidated &&
+          route.sessionKey === sessionEntry.canonicalKey &&
+          route.sessionId === entry.sessionId && route.runId === eventRunId &&
+          route.lifecycleRevision === entry.lifecycleRevision &&
+          route.lifecycleGeneration === params.event.lifecycleGeneration &&
+          route.inputGeneration === exactInput.inputGeneration &&
+          route.deliveryDigest === fingerprintRunRecoverySourceRoute(entry.delivery)
+          ? route : undefined;
+        if (exactRoute && executionId) {
+          patch.runRecoverySourceRouteReceipt = { ...exactRoute, executionId };
+        }
         patch.runRecoveryTerminalReceipt = {
           sessionId: entry.sessionId,
           runId: eventRunId,

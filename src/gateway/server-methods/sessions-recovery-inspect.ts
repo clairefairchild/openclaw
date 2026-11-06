@@ -118,6 +118,8 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
           JSON.stringify(entry.runRecoveryTerminalReceipt) ||
         JSON.stringify(currentEntry.runRecoveryOriginalInputReceipt) !==
           JSON.stringify(entry.runRecoveryOriginalInputReceipt) ||
+        JSON.stringify(currentEntry.runRecoverySourceRouteReceipt) !==
+          JSON.stringify(entry.runRecoverySourceRouteReceipt) ||
         JSON.stringify(currentEntry.mainRestartRecovery) !== JSON.stringify(entry.mainRestartRecovery) ||
         JSON.stringify(currentEntry.restartRecoveryRuns) !== JSON.stringify(entry.restartRecoveryRuns) ||
         createSessionListEntryFilter({ client: client ?? null,

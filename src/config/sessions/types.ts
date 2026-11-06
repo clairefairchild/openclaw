@@ -610,6 +610,22 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Metadata-only source binding captured with the original accepted input. */
+  runRecoverySourceRouteReceipt?: {
+    sessionKey: string;
+    sessionId: string;
+    runId: string;
+    lifecycleRevision: string;
+    lifecycleGeneration: string;
+    inputGeneration: string;
+    sourceRouteGeneration: string;
+    /** Logical store binding revision; changes on replacement, not unrelated row bookkeeping. */
+    storeRevision: string;
+    deliveryDigest: string;
+    /** Set only by the terminal owner after validating the exact live execution. */
+    executionId?: string;
+    invalidated?: true;
+  };
   /** Last owner-accepted source input. No message bytes or transcript-derived identity. */
   runRecoveryOriginalInputReceipt?: {
     sessionKey: string;

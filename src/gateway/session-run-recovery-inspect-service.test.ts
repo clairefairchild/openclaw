@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { inspectGatewayRunRecovery } from "./session-run-recovery-inspect-service.js";
+import { fingerprintRunRecoverySourceRoute } from "../config/sessions/run-recovery-source-route.js";
 
 const entry = {
   sessionId: "s1",
@@ -153,6 +154,46 @@ describe("read-only run recovery inspection", () => {
     expect(inspect({ entry: bound, pendingInputReceipts: [
       { runId: "run-1", state: "pending" },
     ] }).evidence.pendingInput.state).toBe("active");
+  });
+
+  it("exposes only execution-bound source and store generations, never route authority", () => {
+    const delivery = { kind: "internal" } as const;
+    const digest = fingerprintRunRecoverySourceRoute(delivery)!;
+    const input = { sessionKey: "agent:main:main", sessionId: "s1", runId: "run-1",
+      lifecycleRevision: "revision-1", lifecycleGeneration: "gateway-1",
+      inputId: "accepted-input", inputGeneration: "input-generation" };
+    const route = { sessionKey: input.sessionKey, sessionId: input.sessionId,
+      runId: input.runId, lifecycleRevision: input.lifecycleRevision,
+      lifecycleGeneration: input.lifecycleGeneration, inputGeneration: input.inputGeneration,
+      sourceRouteGeneration: "route-generation", storeRevision: "store-revision",
+      deliveryDigest: digest, executionId: "claim-1" };
+    const terminal = { sessionId: "s1", runId: "run-1", lifecycleRevision: "revision-1",
+      lifecycleGeneration: "gateway-1", executionId: "claim-1",
+      executionSource: "owner-claim" as const, ownerEpoch: 7,
+      status: "done" as const, endedAt: 2_000,
+      originalInputReceiptId: input.inputId, inputGeneration: input.inputGeneration };
+    const bound = { ...entry, delivery, lifecycleRunId: undefined, lastRunId: "run-1",
+      status: "done" as const, runRecoveryOriginalInputReceipt: input,
+      runRecoverySourceRouteReceipt: route, runRecoveryTerminalReceipt: terminal } as InternalSessionEntry;
+    expect(inspect({ entry: bound })).toMatchObject({
+      storeRevision: "store-revision", sourceRouteGeneration: "route-generation",
+      metadataCompleteness: { store: true, route: true },
+      evidence: { sourceRoute: { complete: false, state: "unknown" } },
+    });
+    for (const changed of [
+      { ...bound, delivery: { kind: "none" as const } },
+      { ...bound, sessionId: "replacement" },
+      { ...bound, runRecoverySourceRouteReceipt: { ...route, executionId: "other" } },
+      { ...bound, runRecoverySourceRouteReceipt: { ...route, invalidated: true as const } },
+      { ...bound, runRecoverySourceRouteReceipt: { ...route,
+        inputGeneration: "replacement-input" } },
+    ]) {
+      expect(inspect({ entry: changed })).toMatchObject({
+        metadataCompleteness: { store: false, route: false },
+      });
+      expect(inspect({ entry: changed }).storeRevision).toBeUndefined();
+      expect(inspect({ entry: changed }).sourceRouteGeneration).toBeUndefined();
+    }
   });
 
   it("reports only a matching owner-maintained placement generation", () => {

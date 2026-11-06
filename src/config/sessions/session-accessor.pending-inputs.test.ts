@@ -127,6 +127,23 @@ describe("accepted input custody", () => {
     });
   });
 
+  it("persists a source generation and revokes it when the route or session is replaced", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId, lifecycleRevision: "revision-1",
+      delivery: { kind: "internal" }, updatedAt: 1 });
+    await stage("route-run");
+    const accepted = loadSessionEntry(scope())?.runRecoverySourceRouteReceipt;
+    expect(accepted).toMatchObject({ sessionKey, sessionId, runId: "route-run",
+      lifecycleRevision: "revision-1", sourceRouteGeneration: expect.any(String),
+      storeRevision: expect.any(String), deliveryDigest: expect.any(String) });
+    closeOpenClawAgentDatabasesForTest();
+    expect(loadSessionEntry(scope())?.runRecoverySourceRouteReceipt).toEqual(accepted);
+    await upsertSessionEntryCore(scope(), { sessionId, delivery: { kind: "none" }, updatedAt: 2 });
+    expect(loadSessionEntry(scope())?.runRecoverySourceRouteReceipt).toBeUndefined();
+    await upsertSessionEntryCore(scope(), { sessionId: "replacement-session",
+      delivery: { kind: "internal" }, updatedAt: 3 });
+    expect(loadSessionEntry(scope())?.runRecoverySourceRouteReceipt).toBeUndefined();
+  });
+
   it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
     await appendTranscriptMessage(scope(), { message: message("active", "First task") });
     expect(readSessionSubmittedInput(scope(), "active:user")).toEqual(

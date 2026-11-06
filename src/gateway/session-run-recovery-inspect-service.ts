@@ -4,6 +4,7 @@ import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
 import { readSessionRecoveryAdmissionSnapshot } from "../sessions/session-lifecycle-admission.js";
+import { fingerprintRunRecoverySourceRoute } from "../config/sessions/run-recovery-source-route.js";
 
 const UNKNOWN = { complete: false, state: "unknown" } as const;
 const ACTIVE = { complete: true, state: "active" } as const;
@@ -105,6 +106,17 @@ export function inspectGatewayRunRecovery(params: {
     input.inputGeneration === receipt?.inputGeneration &&
     typeof input.inputId === "string" && input.inputId.length > 0 &&
     typeof input.inputGeneration === "string" && input.inputGeneration.length > 0;
+  const route = entry.runRecoverySourceRouteReceipt;
+  const routeBound = inputBound && route && !route.invalidated &&
+    route.sessionKey === key && route.sessionId === entry.sessionId &&
+    route.runId === observedRunId && route.lifecycleRevision === entry.lifecycleRevision &&
+    route.lifecycleGeneration === receipt?.lifecycleGeneration &&
+    route.inputGeneration === input?.inputGeneration &&
+    route.executionId === exactExecution &&
+    typeof route.sourceRouteGeneration === "string" &&
+    route.sourceRouteGeneration.length > 0 &&
+    typeof route.storeRevision === "string" && route.storeRevision.length > 0 &&
+    route.deliveryDigest === fingerprintRunRecoverySourceRoute(entry.delivery);
   return {
     agentId,
     key,
@@ -113,6 +125,8 @@ export function inspectGatewayRunRecovery(params: {
     ...(observedRunId ? { runId: observedRunId } : {}),
     ...(inputBound && input ? { originalInputReceiptId: input.inputId,
       inputGeneration: input.inputGeneration } : {}),
+    ...(routeBound && route ? { sourceRouteGeneration: route.sourceRouteGeneration,
+      storeRevision: route.storeRevision } : {}),
     ...(terminalBound && exactExecution ? { executionId: exactExecution } :
       restartExecution ? { executionId: restartExecution } : {}),
     ...(terminalBound && receipt?.ownerEpoch !== undefined
@@ -124,10 +138,10 @@ export function inspectGatewayRunRecovery(params: {
     metadataCompleteness: {
       identity: true,
       execution: Boolean(restartExecution || (terminalBound && ownerClaimExecution)),
-      store: false,
+      store: Boolean(routeBound),
       owner: Boolean(exactOwner || terminalBound),
       placement: Boolean(exactPlacement),
-      route: false,
+      route: Boolean(routeBound),
     },
     evidence: {
       direct: (owners.consistent && owners.activeRunIds.length > 0) ||

@@ -59,6 +59,7 @@ import {
 } from "./session-canonical-key.js";
 import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
 import { preserveCreationStamp } from "./session-entry-provenance.js";
+import { fingerprintRunRecoverySourceRoute } from "./run-recovery-source-route.js";
 import {
   SESSION_ENTRY_SNAPSHOT_FIELDS,
   splitSessionEntrySnapshots,
@@ -461,6 +462,31 @@ export function writeSessionEntry(
       : options.allowStoredAliases && options.previousEntry !== undefined
         ? (options.previousEntry ?? undefined)
         : readExactSessionEntryRow(database, sessionKey)?.entry;
+  const routeReceipt = normalizedEntry.runRecoverySourceRouteReceipt;
+  const inputReceipt = normalizedEntry.runRecoveryOriginalInputReceipt;
+  const previousInput = canonicalPreviousEntry?.runRecoveryOriginalInputReceipt;
+  const newInputGeneration = inputReceipt?.inputGeneration !== previousInput?.inputGeneration;
+  // A route/session replacement or stale row patch cannot revive an old source binding.
+  if (routeReceipt && (
+    routeReceipt.invalidated ||
+    routeReceipt.sessionKey !== sessionKey ||
+    routeReceipt.sessionId !== normalizedEntry.sessionId ||
+    routeReceipt.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+    routeReceipt.runId !== inputReceipt?.runId ||
+    routeReceipt.inputGeneration !== inputReceipt?.inputGeneration ||
+    routeReceipt.deliveryDigest !== fingerprintRunRecoverySourceRoute(normalizedEntry.delivery) ||
+    (canonicalPreviousEntry && !newInputGeneration && (
+      canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId ||
+      canonicalPreviousEntry.lifecycleRevision !== normalizedEntry.lifecycleRevision ||
+      options.routeContext !== undefined ||
+      canonicalPreviousEntry.runRecoverySourceRouteReceipt?.invalidated ||
+      !canonicalPreviousEntry.runRecoverySourceRouteReceipt ||
+      canonicalPreviousEntry.runRecoverySourceRouteReceipt.sourceRouteGeneration !==
+        routeReceipt.sourceRouteGeneration
+    ))
+  )) {
+    normalizedEntry.runRecoverySourceRouteReceipt = undefined;
+  }
   if (!options.providerReviewMutation && !options.allowStoredAliases) {
     // Bookkeeping can carry a stale snapshot; only the review owner may clear its pause.
     normalizedEntry = {
