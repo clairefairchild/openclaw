@@ -14,11 +14,11 @@ jobs:
       - name: Check out exact recovery source commit
         uses: actions/checkout@v4
         with:
-          ref: 65eb8f36f505452797a8bce23a68bc5f2701e2cb
+          ref: ebfa7530d07bf5fe385c7c71799803b682949e35
           persist-credentials: false
 
       - name: Verify source identity
-        run: test "$(git rev-parse HEAD)" = 65eb8f36f505452797a8bce23a68bc5f2701e2cb
+        run: test "$(git rev-parse HEAD)" = ebfa7530d07bf5fe385c7c71799803b682949e35
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -38,6 +38,7 @@ jobs:
           pnpm test
           src/gateway/session-run-recovery-fence.test.ts
           src/gateway/session-run-recovery-inspect-service.test.ts
+          src/gateway/session-run-recovery-custody.test.ts
           src/gateway/server-methods/sessions-recovery-inspect.test.ts
           src/gateway/session-lifecycle-state.persistence.test.ts
           src/gateway/session-lifecycle-state.recovery.test.ts
