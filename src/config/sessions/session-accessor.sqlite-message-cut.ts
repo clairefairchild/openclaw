@@ -423,6 +423,7 @@ function cloneMessageCutSessionEntry(params: {
     abortedLastRun: false,
     lifecycleRunId: undefined,
     runRecoveryTerminalReceipt: undefined,
+  runRecoveryOriginalInputReceipt: undefined,
     lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,

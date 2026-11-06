@@ -19,6 +19,7 @@ import {
   appendTranscriptEventSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
+  loadSessionEntry,
   readActiveTranscriptEntryAnchor,
   readSessionSubmittedInput,
   replaceTranscriptEvents,
@@ -100,6 +101,30 @@ describe("accepted input custody", () => {
       receipt.finish("interrupted");
     }
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("durably advances owner input generation and invalidates concurrent same-run input", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId, lifecycleRevision: "revision-1", updatedAt: 1 });
+    const first = await stage("lineage-one");
+    const accepted = loadSessionEntry(scope())?.runRecoveryOriginalInputReceipt;
+    expect(accepted).toMatchObject({ sessionId, runId: "lineage-one",
+      lifecycleRevision: "revision-1", inputId: first.inputId,
+      inputGeneration: expect.any(String) });
+    expect(JSON.stringify(accepted)).not.toContain("Continue the task");
+    await promote(first);
+    first.finish("interrupted");
+    closeOpenClawAgentDatabasesForTest();
+    expect(loadSessionEntry(scope())?.runRecoveryOriginalInputReceipt).toEqual(accepted);
+    const next = await stage("lineage-two");
+    const later = loadSessionEntry(scope())?.runRecoveryOriginalInputReceipt;
+    expect(later).toMatchObject({ runId: "lineage-two", inputId: next.inputId });
+    expect(later?.inputGeneration).not.toBe(accepted?.inputGeneration);
+    await stage("lineage-two", { message: {
+      ...message("lineage-two"), idempotencyKey: "lineage-two:second",
+    } });
+    expect(loadSessionEntry(scope())?.runRecoveryOriginalInputReceipt).toEqual({
+      ...later, invalidated: true,
+    });
   });
 
   it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {

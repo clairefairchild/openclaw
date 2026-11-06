@@ -338,6 +338,7 @@ export async function forkSessionEntryFromParentTarget(
             forkedFromParent: true,
             lifecycleRunId: undefined,
             runRecoveryTerminalReceipt: undefined,
+            runRecoveryOriginalInputReceipt: undefined,
             lastRunId: undefined,
             sessionId: fork.transcript.sessionId,
             totalTokens: undefined,

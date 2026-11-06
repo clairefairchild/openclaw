@@ -17,7 +17,7 @@ export function inspectGatewayRunRecovery(params: {
   agentId: string;
   key: string;
   storePath: string;
-  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery" | "runRecoveryTerminalReceipt">>;
+  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery" | "runRecoveryTerminalReceipt" | "runRecoveryOriginalInputReceipt">>;
   placement?: WorkerSessionPlacementRecord;
   chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
@@ -95,12 +95,24 @@ export function inspectGatewayRunRecovery(params: {
     Number.isFinite(receipt.endedAt) && receipt.endedAt > 0 &&
     entry.status === receipt.status && entry.status !== "running" &&
     owners.activeRunIds.length === 0 && !directControllerActive;
+  const input = entry.runRecoveryOriginalInputReceipt;
+  const inputBound = terminalBound && input && !input.invalidated &&
+    input.sessionKey === key && input.sessionId === entry.sessionId &&
+    input.runId === receipt?.runId &&
+    input.lifecycleRevision === entry.lifecycleRevision &&
+    input.lifecycleGeneration === receipt?.lifecycleGeneration &&
+    input.inputId === receipt?.originalInputReceiptId &&
+    input.inputGeneration === receipt?.inputGeneration &&
+    typeof input.inputId === "string" && input.inputId.length > 0 &&
+    typeof input.inputGeneration === "string" && input.inputGeneration.length > 0;
   return {
     agentId,
     key,
     sessionId: entry.sessionId,
     ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
     ...(observedRunId ? { runId: observedRunId } : {}),
+    ...(inputBound && input ? { originalInputReceiptId: input.inputId,
+      inputGeneration: input.inputGeneration } : {}),
     ...(terminalBound && exactExecution ? { executionId: exactExecution } :
       restartExecution ? { executionId: restartExecution } : {}),
     ...(terminalBound && receipt?.ownerEpoch !== undefined
@@ -129,7 +141,7 @@ export function inspectGatewayRunRecovery(params: {
       worker: UNKNOWN,
       terminal: terminalBound ? { complete: true, state: "clear" } : UNKNOWN,
       sourceRoute: UNKNOWN,
-      inputLineage: UNKNOWN,
+      inputLineage: inputBound ? { complete: true, state: "clear" } : UNKNOWN,
       delivery: UNKNOWN,
       progress: UNKNOWN,
     },

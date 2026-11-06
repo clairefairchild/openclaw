@@ -30,6 +30,7 @@ export const SessionsRecoveryInspectResultSchema = closedObject({
   placementGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
   sourceRouteGeneration: Type.Optional(NonEmptyString),
   originalInputReceiptId: Type.Optional(NonEmptyString),
+  inputGeneration: Type.Optional(NonEmptyString),
   observedSessionStatus: Type.Optional(NonEmptyString),
   metadataCompleteness: closedObject({
     identity: Type.Literal(true),

@@ -213,7 +213,12 @@ it("binds an ordinary terminal execution only to its live exact owner claim", as
     });
     expect(loadSessionEntry(target)?.runRecoveryTerminalReceipt?.executionId).toBeUndefined();
     await replaceSessionEntry(target, { sessionId, lifecycleRevision: "revision-2",
-      lifecycleRunId: runId, status: "running", startedAt: 3_000, updatedAt: 3_000 });
+      lifecycleRunId: runId, status: "running", startedAt: 3_000, updatedAt: 3_000,
+      runRecoveryOriginalInputReceipt: {
+        sessionKey: target.sessionKey, sessionId, runId,
+        lifecycleRevision: "revision-2", lifecycleGeneration: generation,
+        inputId: "accepted-input-1", inputGeneration: "input-generation-1",
+      } });
     await lifecycleState.persistGatewaySessionLifecycleEvent({ sessionKey: target.sessionKey,
       event: { runId, sessionId, contextClaimId: claimId,
         lifecycleGeneration: generation, ts: 4_000,
@@ -222,7 +227,8 @@ it("binds an ordinary terminal execution only to its live exact owner claim", as
     expect(loadSessionEntry({ ...target, readConsistency: "latest" })?.runRecoveryTerminalReceipt)
       .toMatchObject({ sessionId, runId, lifecycleRevision: "revision-2",
         executionId: claimId, executionSource: "owner-claim",
-        ownerEpoch: expect.any(Number) });
+        ownerEpoch: expect.any(Number), originalInputReceiptId: "accepted-input-1",
+        inputGeneration: "input-generation-1" });
   } finally {
     if (claimId) { releaseAgentRunContext(runId, claimId); }
     routing.loadSessionEntry.mockReset();

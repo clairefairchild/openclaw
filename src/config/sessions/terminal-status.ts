@@ -14,6 +14,7 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     status: undefined,
     lifecycleRunId: undefined,
     runRecoveryTerminalReceipt: undefined,
+  runRecoveryOriginalInputReceipt: undefined,
     lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,

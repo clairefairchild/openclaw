@@ -14,6 +14,7 @@ export function buildForkedGatewaySessionEntry(
     sessionId: fork.sessionId,
     lifecycleRunId: undefined,
     lastRunId: undefined,
+    runRecoveryOriginalInputReceipt: undefined,
     forkSource: previousEntry?.forkSource ?? forkSource,
     ...(previousEntry?.sessionId && previousEntry.sessionId !== fork.sessionId
       ? { previousSessionId: previousEntry.sessionId }

@@ -82,6 +82,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "mainRestartRecovery"
   | "lifecycleRunId"
   | "runRecoveryTerminalReceipt"
+  | "runRecoveryOriginalInputReceipt"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
@@ -514,6 +515,13 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           owners.exactOwners[0]?.claimIds.length === 1 &&
           owners.exactOwners[0].claimIds[0] === claimId ? claimId : undefined;
         const executionId = restartExecutionId ?? ownerClaimId;
+        const input = entry.runRecoveryOriginalInputReceipt;
+        const exactInput = executionId && input && !input.invalidated &&
+          input.sessionKey === sessionEntry.canonicalKey &&
+          input.sessionId === entry.sessionId && input.runId === eventRunId &&
+          input.lifecycleRevision === entry.lifecycleRevision &&
+          input.lifecycleGeneration === params.event.lifecycleGeneration &&
+          input.inputId && input.inputGeneration ? input : undefined;
         patch.runRecoveryTerminalReceipt = {
           sessionId: entry.sessionId,
           runId: eventRunId,
@@ -524,6 +532,10 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           ...(executionId ? { executionId,
             executionSource: restartExecutionId ? "restart-recovery" as const : "owner-claim" as const } : {}),
           ...(ownerEpoch !== undefined ? { ownerEpoch } : {}),
+          ...(exactInput ? {
+            originalInputReceiptId: exactInput.inputId,
+            inputGeneration: exactInput.inputGeneration,
+          } : {}),
         };
       }
       if (providerReview && Object.keys(patch).length > 0) {

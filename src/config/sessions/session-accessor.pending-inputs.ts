@@ -37,7 +37,7 @@ import {
   type PendingInputRequest,
 } from "./session-accessor.pending-input-request.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   claimCurrentSessionPendingInputDedupeRecovery,
   isFinalInputCompletion,
@@ -403,6 +403,36 @@ export async function stageSessionPendingInput(
                 accepted_at: Date.now(),
               }),
             );
+          }
+          // The accepted-input owner advances lineage in the same durable transaction
+          // as admission. Replays retain their original generation. A second input
+          // for one run destroys proof of which source was the original.
+          if (!existing) {
+            const session = readSessionEntryRow(current, resolved.sessionKey)?.entry;
+            if (!session || session.sessionId !== scope.sessionId) {
+              throw new Error("Accepted input lost its exact session before lineage write");
+            }
+            const prior = session.runRecoveryOriginalInputReceipt;
+            const sameRun = prior?.sessionKey === resolved.sessionKey &&
+              prior.sessionId === scope.sessionId &&
+              prior.runId === options.runId &&
+              prior.lifecycleRevision === session.lifecycleRevision;
+            writeSessionEntry(current, resolved.sessionKey, {
+              ...session,
+              runRecoveryOriginalInputReceipt: sameRun
+                ? { ...prior, invalidated: true }
+                : session.lifecycleRevision
+                  ? {
+                      sessionKey: resolved.sessionKey,
+                      sessionId: scope.sessionId,
+                      runId: options.runId,
+                      lifecycleRevision: session.lifecycleRevision,
+                      lifecycleGeneration,
+                      inputId,
+                      inputGeneration: randomUUID(),
+                    }
+                  : undefined,
+            }, { previousEntry: session });
           }
           const physical = readOpenClawAgentDatabaseIdentity(current);
           return {

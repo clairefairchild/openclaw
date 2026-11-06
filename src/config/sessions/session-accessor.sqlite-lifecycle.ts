@@ -234,6 +234,9 @@ export async function resetSessionEntryLifecycle(
             currentEntry: current ? structuredClone(current.entry) : undefined,
             primaryKey: params.target.canonicalKey,
           });
+          // A reset cannot inherit accepted-input lineage, even when a caller
+          // accidentally reuses the old session ID or lifecycle revision.
+          nextEntry.runRecoveryOriginalInputReceipt = undefined;
           const shouldAppendResetBoundary =
             params.resetBoundary &&
             current?.entry.sessionId &&

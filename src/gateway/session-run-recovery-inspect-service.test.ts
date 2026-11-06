@@ -112,6 +112,49 @@ describe("read-only run recovery inspection", () => {
     expect(inspect({ entry: bound, readRunOwners: () => ({ ...noOwners(),
       activeRunIds: ["run-1"] }) }).evidence.terminal.state).toBe("unknown");
   });
+  it("reports input lineage only for the exact terminal owner and current input generation", () => {
+    const input = { sessionKey: "agent:main:main", sessionId: "s1", runId: "run-1",
+      lifecycleRevision: "revision-1",
+      lifecycleGeneration: "gateway-1", inputId: "accepted-input-1",
+      inputGeneration: "input-generation-1" };
+    const terminal = { sessionId: "s1", runId: "run-1", lifecycleRevision: "revision-1",
+      lifecycleGeneration: "gateway-1", executionId: "claim-1",
+      executionSource: "owner-claim" as const, ownerEpoch: 7,
+      status: "done" as const, endedAt: 2_000,
+      originalInputReceiptId: input.inputId, inputGeneration: input.inputGeneration };
+    const bound = { ...entry, lifecycleRunId: undefined, lastRunId: "run-1",
+      status: "done" as const, runRecoveryOriginalInputReceipt: input,
+      runRecoveryTerminalReceipt: terminal } as InternalSessionEntry;
+    const result = inspect({ entry: bound });
+    expect(result).toMatchObject({ originalInputReceiptId: input.inputId,
+      inputGeneration: input.inputGeneration,
+      evidence: { inputLineage: { complete: true, state: "clear" } } });
+    expect(result.storeRevision).toBeUndefined();
+    expect(result.evidence.sourceRoute.state).toBe("unknown");
+    for (const changed of [
+      { ...bound, runRecoveryOriginalInputReceipt: { ...input, invalidated: true as const } },
+      { ...bound, runRecoveryOriginalInputReceipt: { ...input, inputId: "new-user-input" } },
+      { ...bound, runRecoveryOriginalInputReceipt: { ...input, inputGeneration: "next-generation" } },
+      { ...bound, runRecoveryOriginalInputReceipt: { ...input, sessionId: "reset-session" } },
+      { ...bound, runRecoveryOriginalInputReceipt: { ...input, runId: "other-run" } },
+      { ...bound, lifecycleRevision: "reset-revision" },
+      { ...bound, runRecoveryTerminalReceipt: { ...terminal, executionId: "" } },
+      { ...bound, runRecoveryTerminalReceipt: { ...terminal, inputGeneration: undefined } },
+    ]) {
+      expect(inspect({ entry: changed })).toMatchObject({
+        evidence: { inputLineage: { complete: false, state: "unknown" } },
+      });
+      expect(inspect({ entry: changed }).originalInputReceiptId).toBeUndefined();
+    }
+    // A consumed source is not active pending custody; a newer pending source is.
+    expect(inspect({ entry: bound, pendingInputReceipts: [
+      { runId: "run-1", state: "consumed", consumedByEventId: "event-1" },
+    ] }).evidence.pendingInput.state).toBe("unknown");
+    expect(inspect({ entry: bound, pendingInputReceipts: [
+      { runId: "run-1", state: "pending" },
+    ] }).evidence.pendingInput.state).toBe("active");
+  });
+
   it("reports only a matching owner-maintained placement generation", () => {
     const placement = { agentId: "main", sessionKey: "agent:main:main",
       sessionId: "s1", generation: 8, turnClaim: null } as WorkerSessionPlacementRecord;

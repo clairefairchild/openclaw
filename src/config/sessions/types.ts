@@ -610,6 +610,18 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Last owner-accepted source input. No message bytes or transcript-derived identity. */
+  runRecoveryOriginalInputReceipt?: {
+    sessionKey: string;
+    sessionId: string;
+    runId: string;
+    lifecycleRevision: string;
+    lifecycleGeneration: string;
+    inputId: string;
+    inputGeneration: string;
+    /** Another accepted input for this same run makes original lineage ambiguous. */
+    invalidated?: true;
+  };
   /** Exact settled lifecycle write, not by itself proof that all work or delivery ended. */
   runRecoveryTerminalReceipt?: {
     sessionId: string;
@@ -622,6 +634,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     /** Proven from the active owner claim or the restart-recovery admission token. */
     executionSource?: "owner-claim" | "restart-recovery";
     ownerEpoch?: number;
+    originalInputReceiptId?: string;
+    inputGeneration?: string;
   };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
