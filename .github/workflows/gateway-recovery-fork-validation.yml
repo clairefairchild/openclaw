@@ -14,11 +14,11 @@ jobs:
       - name: Check out exact recovery source commit
         uses: actions/checkout@v4
         with:
-          ref: c5c5ae3e8445e023f91573feb4cafba46fb07bfa
+          ref: 7d05713138071c03499e76cf735e75cf62f0d012
           persist-credentials: false
 
       - name: Verify source identity
-        run: test "$(git rev-parse HEAD)" = c5c5ae3e8445e023f91573feb4cafba46fb07bfa
+        run: test "$(git rev-parse HEAD)" = 7d05713138071c03499e76cf735e75cf62f0d012
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -57,3 +57,4 @@ jobs:
           src/state/run-recovery-queue-coordinator.test.ts
           src/state/run-recovery-queue-coordinator-broker.test.ts
           src/auto-reply/reply/queue/recovery-ingress.test.ts
+          src/process/command-queue.recovery-custody.test.ts
