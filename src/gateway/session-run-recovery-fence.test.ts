@@ -183,7 +183,8 @@ describe("coordinator claim host authority", () => {
     expect(() => assertRecoveryClaimHostCurrent(input, { ...authority,
       reviewToken: "stale" })).toThrow("expired");
     snapshot.custody.laneQueue.complete = false;
-    expect(() => assertRecoveryClaimHostCurrent(input, authority)).toThrow("laneQueue_unknown");
+    expect(() => assertRecoveryClaimHostCurrent(input, authority, "admitted"))
+      .toThrow("laneQueue_unknown");
     snapshot.custody.laneQueue.complete = true;
     review.obligation = "unknown";
     expect(() => assertRecoveryClaimHostCurrent(input, authority)).toThrow("unfinished_obligation_unproven");
