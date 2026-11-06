@@ -26,7 +26,7 @@ import {
 } from "./pending-final-delivery.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
-import { enqueueFollowupRun, refreshQueuedFollowupSession } from "./queue.js";
+import { enqueueFollowupWithRecoveryReservation, refreshQueuedFollowupSession } from "./queue.js";
 import {
   buildStrandedReplyDeliveryFailurePayload,
   resolveStrandedReplyRecovery,
@@ -179,7 +179,7 @@ export async function completeReplyAgentRun(input: {
     if (recovery.kind === "diagnostic") {
       finalPayloads = [...finalPayloads, recovery.payload];
     } else if (recovery.kind === "retry") {
-      const retryEnqueued = enqueueFollowupRun(
+      const retryEnqueued = await enqueueFollowupWithRecoveryReservation(
         queueKey,
         recovery.run,
         resolvedQueue,

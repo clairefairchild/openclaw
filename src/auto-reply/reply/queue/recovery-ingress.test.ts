@@ -8,8 +8,9 @@ import { expect, it } from "vitest";
 const source = `
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { enqueueActiveRunFollowupWithRecoveryReservation } from './src/auto-reply/reply/queue/enqueue.ts';
+import { enqueueActiveRunFollowupWithRecoveryReservation, enqueueFollowupWithRecoveryReservation, parkSteerCandidateWithRecoveryReservation, enqueueFollowupRun, parkSteerCandidate } from './src/auto-reply/reply/queue/enqueue.ts';
 import { getExistingFollowupQueue } from './src/auto-reply/reply/queue/state.ts';
+import { openRecoveryQueueCoordinatorBroker } from './src/state/run-recovery-queue-coordinator-broker.ts';
 const dbPath = process.argv[1];
 const key = 'agent:a:main';
 const settings = { mode: 'followup', cap: 1, dropPolicy: 'new' };
@@ -41,6 +42,32 @@ assert.equal(await enqueueActiveRunFollowupWithRecoveryReservation(key, capped, 
 const rows = readRows();
 assert.deepEqual(rows.map(row => row.state), ['queued', 'settled', 'settled']);
 assert.ok(rows[1].terminal_receipt_id?.startsWith('rejected:'));
+const retrySettings = { mode: 'followup', cap: 10, dropPolicy: 'new' };
+const finalRetry = createRun('final-retry');
+assert.equal(await enqueueFollowupWithRecoveryReservation('final-retry-key', finalRetry, retrySettings, 'none', runFollowup, false, { position: 'front' }), true);
+const sourceRetry = createRun('source-retry');
+assert.equal(await enqueueFollowupWithRecoveryReservation('source-retry-key', sourceRetry, retrySettings, 'none', runFollowup, false, { position: 'front' }), true);
+const steered = createRun('steered');
+const parked = await parkSteerCandidateWithRecoveryReservation('steer-key', steered, retrySettings, runFollowup);
+assert.ok(parked);
+assert.equal(getExistingFollowupQueue('steer-key')?.items[0], steered);
+assert.equal(steered.steerPending?.phase, 'waiting');
+assert.deepEqual(readRows().map(row => row.state), ['queued', 'settled', 'settled', 'queued', 'queued', 'queued']);
+const oldEnv = process.env.NODE_ENV;
+const oldVitest = process.env.VITEST;
+process.env.NODE_ENV = 'production';
+process.env.VITEST = 'false';
+try {
+  assert.throws(() => enqueueFollowupRun('unfenced', createRun('sync'), retrySettings), /durable recovery reservation/);
+  assert.throws(() => parkSteerCandidate('unfenced', createRun('park'), retrySettings, runFollowup), /durable recovery reservation/);
+} finally { process.env.NODE_ENV = oldEnv; process.env.VITEST = oldVitest; }
+assert.equal(getExistingFollowupQueue('unfenced'), undefined);
+// Emulate a transport that loses the reserve acknowledgment after the worker
+// commits. The caller must not publish or settle this ambiguous reservation.
+const broker = await openRecoveryQueueCoordinatorBroker(dbPath).catch(() => undefined);
+// The ingress broker already owns this path, so a second host must be refused.
+assert.equal(broker, undefined);
+
 const db = new DatabaseSync(dbPath);
 db.prepare('UPDATE recovery_queue_meta SET incarnation = ? WHERE singleton = 1').run('00000000-0000-4000-8000-000000000001');
 db.close();
@@ -75,12 +102,36 @@ it("reserves before active-run publication, settles definite rejection, and hold
       },
     );
     expect(result, result.stderr).toMatchObject({ code: 0, stdout: "ok" });
+    // Simulate a reserve that committed but whose acknowledgment was lost
+    // before publication. A restarted host must retain the unknown custody.
+    const ambiguousSource = `
+import { openRecoveryQueueCoordinatorBroker } from './src/state/run-recovery-queue-coordinator-broker.ts';
+const broker = await openRecoveryQueueCoordinatorBroker(process.argv[1]);
+await broker.reserve({ workId: 'lost-reserve-ack', queue: 'followup', scope: { kind: 'unmarked' } });
+process.exit(0);
+`;
+    const ambiguousResult = await new Promise<{ code: number | null; stderr: string }>(
+      (resolve, reject) => {
+        const child = spawn(process.execPath, [
+          "--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", ambiguousSource, dbPath,
+        ], {
+          cwd: process.cwd(),
+          env: { ...process.env, OPENCLAW_STATE_DIR: root },
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+        child.on("error", reject);
+        child.on("close", (code) => resolve({ code, stderr }));
+      },
+    );
+    expect(ambiguousResult, ambiguousResult.stderr).toMatchObject({ code: 0 });
     // A fresh process still sees unresolved accepted custody. No cutover marker
     // was installed, so the recovery claim remains unavailable.
     const db = new DatabaseSync(dbPath);
     try {
       expect(db.prepare("SELECT state FROM recovery_queue_reservations WHERE state = 'queued'").all())
-        .toHaveLength(1);
+        .toHaveLength(5);
       expect(db.prepare("SELECT queue_kind FROM recovery_queue_cutovers").all()).toHaveLength(0);
     } finally {
       db.close();

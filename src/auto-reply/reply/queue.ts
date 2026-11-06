@@ -4,9 +4,11 @@ export { clearSessionQueues } from "./queue/cleanup.js";
 export { scheduleFollowupDrain } from "./queue/drain.js";
 export {
   enqueueActiveRunFollowupWithRecoveryReservation,
+  enqueueFollowupWithRecoveryReservation,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   parkSteerCandidate,
+  parkSteerCandidateWithRecoveryReservation,
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearRemovedQueuedAuthProfiles, refreshQueuedFollowupSession } from "./queue/state.js";

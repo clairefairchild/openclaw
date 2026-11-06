@@ -113,7 +113,7 @@ vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
-    enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
+    enqueueFollowupWithRecoveryReservation: (...args: unknown[]) => enqueueFollowupRunMock(...args),
   };
 });
 

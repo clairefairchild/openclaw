@@ -17,7 +17,7 @@ const deliveryState = vi.hoisted(() => ({
 
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
-  enqueueFollowupRun: (...args: unknown[]) => deliveryState.enqueue(...args),
+  enqueueFollowupWithRecoveryReservation: (...args: unknown[]) => deliveryState.enqueue(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({

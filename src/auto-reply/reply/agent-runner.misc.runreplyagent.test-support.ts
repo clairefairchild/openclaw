@@ -16,7 +16,7 @@ import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupRun, enqueueFollowupWithRecoveryReservation, scheduleFollowupDrain } from "./queue.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 
 const tempDirs = createTempDirTracker();
@@ -144,7 +144,14 @@ vi.mock("./queue.js", () => {
   return {
     admitFollowupRunLifecycle: vi.fn(async () => {}),
     enqueueFollowupRun: vi.fn(),
+    enqueueFollowupWithRecoveryReservation: vi.fn(),
     parkSteerCandidate: vi.fn(() => ({
+      admit: async () => "steer",
+      accepted: vi.fn(),
+      fallback: vi.fn(),
+      consume: vi.fn(),
+    })),
+    parkSteerCandidateWithRecoveryReservation: vi.fn(() => ({
       admit: async () => "steer",
       accepted: vi.fn(),
       fallback: vi.fn(),
@@ -254,6 +261,7 @@ function setupAgentRunnerMocks(): void {
   refreshQueuedFollowupSessionMock.mockReset();
   refreshQueuedFollowupSessionMock.mockResolvedValue(undefined);
   vi.mocked(enqueueFollowupRun).mockReset();
+  vi.mocked(enqueueFollowupWithRecoveryReservation).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   loadCronStoreMock.mockReset();
   // Default: no cron jobs in store.

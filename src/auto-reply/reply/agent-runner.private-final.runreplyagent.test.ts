@@ -24,7 +24,7 @@ import {
   createTestQueuedFollowupRun,
   createTestTemplateContext,
 } from "./agent-runner.test-fixtures.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupWithRecoveryReservation, scheduleFollowupDrain } from "./queue.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -48,7 +48,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
   function expectNoRecovery() {
     expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
   }
 
   function expectSanitizedDiagnostic(result: Awaited<ReturnType<typeof runReplyAgent>>) {
@@ -226,8 +226,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       finalAssistantRawText: `<final>${visibleFinal}</final>`,
     });
 
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[1];
     expect(retryRun?.prompt).toContain(visibleFinal);
     expect(retryRun?.prompt).not.toContain("<final>");
   });
@@ -240,8 +240,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       payloadText: `[[reply_to_current]] ${normalizedFinal}`,
     });
 
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[1];
     expect(retryRun?.prompt).toContain(normalizedFinal);
     expect(retryRun?.prompt).not.toContain("[[reply_to_current]]");
   });
@@ -261,8 +261,8 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       ],
     });
 
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[1];
     expect(retryRun?.prompt).toContain(visibleFinal);
     expect(retryRun?.prompt).not.toContain("secret user trace");
     expect(retryRun?.prompt).not.toContain("Active Memory");
@@ -273,17 +273,17 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[1];
     expect(retryRun?.transcriptPrompt).toBeUndefined();
     expect(retryRun?.userTurnTranscriptRecorder).toBeUndefined();
     expect(retryRun?.currentInboundContext).toBeUndefined();
     expect(retryRun?.run?.suppressNextUserMessagePersistence).toBe(true);
     expect(retryRun?.run?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(retryRun?.disableCollectBatching).toBe(true);
-    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[3]).toBe("none");
-    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
-    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({ position: "front" });
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[3]).toBe("none");
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[5]).toBe(false);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation).mock.calls[0]?.[6]).toEqual({ position: "front" });
   });
 
   it("records a short private final without a message call as non-delivery", async () => {
@@ -338,7 +338,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
     expect(onObservedReplyDelivery).not.toHaveBeenCalled();
   });
 
@@ -372,7 +372,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     const [payload] = payloads;
     assert(payload);
     expect(getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression).toBe(true);
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
   });
 
   it("surfaces a canonical failure despite a private partial reply", async () => {
@@ -388,7 +388,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     );
     expect(deliverable).toEqual([expect.objectContaining({ isError: true })]);
     expect(deliverable[0]?.text).not.toBe(privateText);
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
   });
 
   it("still retries when the message tool sent only to a non-source target", async () => {
@@ -396,13 +396,13 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15559998888" }],
     });
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
   });
 
   it("still retries when only an unrelated cron side effect succeeded", async () => {
     await runPrivateFinalCase({ successfulCronAdds: 1 });
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
   });
 
   it.each(["required", "optional"] as const)(
@@ -426,7 +426,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
       }
       expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
-      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+      expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     },
   );
 
@@ -463,7 +463,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     expectPrivateOriginal(expectSanitizedDiagnostic(result), finalAssistantText);
   });
 
@@ -473,7 +473,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     });
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
   });
 
   it("does not emit retry-failure diagnostic after internal source reply delivery", async () => {
@@ -502,12 +502,12 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("emits the same sanitized diagnostic when the retry cannot be enqueued", async () => {
-    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(false);
+    vi.mocked(enqueueFollowupWithRecoveryReservation).mockResolvedValueOnce(false);
 
     const { result, finalAssistantText } = await runPrivateFinalCase({});
 
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
     expectPrivateOriginal(expectSanitizedDiagnostic(result), finalAssistantText);
   });
 
@@ -518,7 +518,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
       sessionId: "session",
       resetTriggered: false,
     });
-    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
+    vi.mocked(enqueueFollowupWithRecoveryReservation).mockResolvedValueOnce(true);
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
       expect(key).toBe(sessionKey);
@@ -527,7 +527,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
 
     await runPrivateFinalCase({ replyOperation });
 
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
     expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
     expect(scheduleFollowupDrain).not.toHaveBeenCalled();
 

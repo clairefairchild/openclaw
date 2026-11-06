@@ -39,7 +39,7 @@ import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
-import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
+import { enqueueFollowupWithRecoveryReservation, resolveQueueSettings, type FollowupRun } from "./queue.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import {
@@ -566,7 +566,7 @@ export async function deliverFollowupDecision(params: {
       : decision.run;
     const enqueued =
       key &&
-      enqueueFollowupRun(
+      (await enqueueFollowupWithRecoveryReservation(
         key,
         retryRun,
         resolveQueueSettings({
@@ -578,7 +578,7 @@ export async function deliverFollowupDecision(params: {
         params.runFollowup,
         false,
         { position: "front" },
-      );
+      ));
     if (enqueued) {
       return { kind: "source-retry" };
     }

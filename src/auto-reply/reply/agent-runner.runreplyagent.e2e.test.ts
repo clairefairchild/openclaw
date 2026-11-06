@@ -323,7 +323,9 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
   enqueueFollowupRun: vi.fn(),
+  enqueueFollowupWithRecoveryReservation: vi.fn(),
   parkSteerCandidate: parkedSteer.park,
+  parkSteerCandidateWithRecoveryReservation: parkedSteer.park,
   refreshQueuedFollowupSession: vi.fn(),
   scheduleFollowupDrain: vi.fn(),
 }));

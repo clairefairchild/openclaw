@@ -13,7 +13,7 @@ import {
 } from "./agent-runner-core.js";
 import {
   admitFollowupRunLifecycle,
-  parkSteerCandidate,
+  parkSteerCandidateWithRecoveryReservation,
   resolveFollowupAbortSignal,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -101,7 +101,7 @@ export async function runActiveReplySteer(
     activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
       ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
       : undefined;
-  const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
+  const parked = await parkSteerCandidateWithRecoveryReservation(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     releaseAdmissionTicket();
     typing.cleanup();

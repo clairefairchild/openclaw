@@ -130,7 +130,7 @@ function appendQueueItem(params: {
   }
 }
 
-export function enqueueFollowupRun(
+function publishFollowupRun(
   key: string,
   run: FollowupRun,
   settings: QueueSettings,
@@ -210,17 +210,36 @@ export function enqueueFollowupRun(
   return true;
 }
 
-// This first ingress cutover covers the active-run followup producer only. A
-// Gateway-owned broker remains open for the process lifetime; an ambiguous
-// reserve error is held and never retried as a new publication.
-let ingressBroker: ReturnType<typeof openRecoveryQueueCoordinatorBroker> | undefined;
-const ingressWorkIds = new WeakMap<FollowupRun, string>();
-
-export async function enqueueActiveRunFollowupWithRecoveryReservation(
+// The synchronous publisher is available to queue unit tests only. Production
+// ingress must pass through the async broker reservation before publication.
+export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
   settings: QueueSettings,
-  runFollowup: (run: FollowupRun) => Promise<void>,
+  dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
+  options: EnqueueFollowupRunOptions = {},
+): boolean {
+  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
+    throw new Error("Synchronous followup enqueue requires a durable recovery reservation");
+  }
+  return publishFollowupRun(key, run, settings, dedupeMode, runFollowup, restartIfIdle, options);
+}
+
+// Keep a single process-owned broker and stable work identity for each source.
+// An ambiguous reservation or publication stays unresolved and fails closed.
+let ingressBroker: ReturnType<typeof openRecoveryQueueCoordinatorBroker> | undefined;
+const ingressWorkIds = new WeakMap<FollowupRun, string>();
+
+export async function enqueueFollowupWithRecoveryReservation(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  dedupeMode: QueueDedupeMode,
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
+  options: EnqueueFollowupRunOptions = {},
 ): Promise<boolean> {
   ingressBroker ??= openRecoveryQueueCoordinatorBroker();
   const broker = await ingressBroker;
@@ -229,16 +248,29 @@ export async function enqueueActiveRunFollowupWithRecoveryReservation(
     workId = randomUUID();
     ingressWorkIds.set(run, workId);
   }
-  // The runner's session can be rebound after this point. Until canonical
-  // incarnation proof is wired, conservative global scope fences every claim.
+  // The queued run can be rebound to a later session. Until exact placement
+  // is proven, a global unmarked reservation vetoes every recovery claim.
   await broker.reserve({ workId, queue: "followup", scope: { kind: "unmarked" } });
-  // If publication throws, it may already have taken custody. Keep the row
-  // unresolved. A definite rejection is the only safe rollback here.
-  const enqueued = enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false);
+  const enqueued = publishFollowupRun(
+    key, run, settings, dedupeMode, runFollowup, restartIfIdle, options,
+  );
+  // Only a definitive local rejection can release the reservation. Accepted,
+  // thrown, or ambiguous work awaits authoritative terminal reconciliation.
   if (!enqueued) {
     await broker.settle(workId, `rejected:${workId}`);
   }
   return enqueued;
+}
+
+export async function enqueueActiveRunFollowupWithRecoveryReservation(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<boolean> {
+  return enqueueFollowupWithRecoveryReservation(
+    key, run, settings, "message-id", runFollowup, false,
+  );
 }
 
 function applyFollowupQueueOverflow(
@@ -404,13 +436,35 @@ export function parkSteerCandidate(
   settings: QueueSettings,
   runFollowup: (run: FollowupRun) => Promise<void>,
 ): ParkedSteerReservation | undefined {
-  if (
-    !enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false, {
-      steerCandidate: true,
-    })
-  ) {
+  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
+    throw new Error("Synchronous steering park requires a durable recovery reservation");
+  }
+  if (!publishFollowupRun(key, run, settings, "message-id", runFollowup, false, {
+    steerCandidate: true,
+  })) {
     return undefined;
   }
+  return createParkedSteerReservation(key, run);
+}
+
+export async function parkSteerCandidateWithRecoveryReservation(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<ParkedSteerReservation | undefined> {
+  if (!await enqueueFollowupWithRecoveryReservation(
+    key, run, settings, "message-id", runFollowup, false, { steerCandidate: true },
+  )) {
+    return undefined;
+  }
+  return createParkedSteerReservation(key, run);
+}
+
+function createParkedSteerReservation(
+  key: string,
+  run: FollowupRun,
+): ParkedSteerReservation {
   logMessageQueuedWithBacklogPolicy(
     {
       sessionId: run.run.sessionId,
