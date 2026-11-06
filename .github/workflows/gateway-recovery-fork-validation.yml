@@ -14,11 +14,11 @@ jobs:
       - name: Check out exact recovery source commit
         uses: actions/checkout@v4
         with:
-          ref: 728328df3d7b91283bdd46bf4fe91bbd1ef1d98b
+          ref: f614621b933e0ab710992f2cbb033eaec676ca6c
           persist-credentials: false
 
       - name: Verify source identity
-        run: test "$(git rev-parse HEAD)" = 728328df3d7b91283bdd46bf4fe91bbd1ef1d98b
+        run: test "$(git rev-parse HEAD)" = f614621b933e0ab710992f2cbb033eaec676ca6c
 
       - name: Set up Node
         uses: actions/setup-node@v4
