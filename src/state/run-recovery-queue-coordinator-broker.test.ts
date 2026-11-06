@@ -23,8 +23,8 @@ try {
   assert.equal(await first.reserve(work), 'reserved');
   assert.equal(await first.reserve(work), 'repeated');
   const read = new DatabaseSync(databasePath);
-  assert.deepEqual(read.prepare('SELECT state FROM recovery_queue_reservations WHERE work_id = ?')
-    .get(work.workId), { state: 'queued' });
+  assert.equal(read.prepare('SELECT state FROM recovery_queue_reservations WHERE work_id = ?')
+    .get(work.workId)?.state, 'queued');
   read.close();
   await first.close();
   const second = await openRecoveryQueueCoordinatorBroker(databasePath);
