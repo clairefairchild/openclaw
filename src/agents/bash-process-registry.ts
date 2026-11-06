@@ -4,6 +4,7 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
@@ -125,16 +126,48 @@ let nextProcessSessionStartOrder = 0;
 // Promotion stays live when process removal clears its presentation state.
 const activeExecSessions = new Map<
   string,
-  { session: ProcessSession; promoted: boolean; settled?: Deferred }
+  { session: ProcessSession; agentId?: string; sessionKey?: string;
+    promoted: boolean; settled?: Deferred }
 >();
 let finishedSessionOutputChars = 0;
 
-/** Presence-only read, including foreground/finalizing producers that are not
- * visible through the background-process list. No session incarnation is
- * recorded here, so absence cannot establish recovery quiescence. */
+// A process restart must never inherit the prior registry's absence observation.
+const recoveryRegistryInstance = randomUUID();
+let recoveryRegistryVersion = 0n;
+
+/** Exact registry-generation observation, not an absence lease. In particular,
+ * startup can register another process after this read; only a claim-bound
+ * admission fence could promote an empty snapshot to clear. */
+export function readTrackedProcessRecoverySnapshot(agentId: string, sessionKey: string): {
+  instance: string;
+  version: string;
+  active: boolean;
+} {
+  return {
+    instance: recoveryRegistryInstance,
+    version: recoveryRegistryVersion.toString(),
+    // A producer missing either attribution may belong to this execution.
+    // This can conservatively veto another session; it cannot prove absence.
+    active: [...activeExecSessions.values()].some((owner) =>
+      (owner.sessionKey === sessionKey || owner.sessionKey === undefined) &&
+      (owner.agentId === agentId || owner.agentId === undefined)),
+  };
+}
+
+/** Recheck a local observation. Equality is necessary but not sufficient for
+ * claim admission: registrations are not fenced by the SQLite transaction. */
+export function isTrackedProcessRecoverySnapshotCurrent(snapshot: {
+  instance: string;
+  version: string;
+}): boolean {
+  return snapshot.instance === recoveryRegistryInstance &&
+    snapshot.version === recoveryRegistryVersion.toString();
+}
+
+/** Presence-only compatibility read, including foreground/finalizing producers.
+ * No session incarnation is recorded here, so absence is never quiescence. */
 export function hasTrackedProcessForRecoverySession(agentId: string, sessionKey: string): boolean {
-  return [...activeExecSessions.values()].some(({ session }) =>
-    session.agentId === agentId && session.sessionKey === sessionKey);
+  return readTrackedProcessRecoverySnapshot(agentId, sessionKey).active;
 }
 
 let sweeper: NodeJS.Timeout | null = null;
@@ -146,9 +179,14 @@ export function isProcessSessionIdTaken(id: string): boolean {
 
 /** Adds a running session; retention starts only after background completion. */
 export function addSession(session: ProcessSession) {
+  if (isProcessSessionIdTaken(session.id)) {
+    throw new Error("process session id is already owned");
+  }
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
   runningSessions.set(session.id, session);
-  activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
+  activeExecSessions.set(session.id, { session, agentId: session.agentId,
+    sessionKey: session.sessionKey, promoted: session.backgrounded });
+  recoveryRegistryVersion += 1n;
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -333,6 +371,7 @@ export function settleExecSessionFinalization(session: ProcessSession): void {
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     activeExecSessions.delete(session.id);
+    recoveryRegistryVersion += 1n;
     active.settled?.resolve();
   }
 }
@@ -501,6 +540,7 @@ function resetProcessRegistryForTests() {
     active.settled?.resolve();
   }
   activeExecSessions.clear();
+  recoveryRegistryVersion += 1n;
   stopSweeper();
 }
 

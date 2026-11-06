@@ -3,6 +3,8 @@ import {
   addSession,
   deleteSession,
   hasTrackedProcessForRecoverySession,
+  isTrackedProcessRecoverySnapshotCurrent,
+  readTrackedProcessRecoverySnapshot,
   settleExecSessionFinalization,
   type ProcessSession,
 } from "../agents/bash-process-registry.js";
@@ -28,6 +30,59 @@ describe("run recovery process-local presence reads", () => {
     controller.abort();
     await expect(queued).rejects.toThrow();
     expect(hasQueuedCommandForRecoverySession(key)).toBe(false);
+  });
+
+  it("binds process observations to a registry lifetime and invalidates a pre-spawn empty read", () => {
+    const empty = readTrackedProcessRecoverySnapshot("main", key);
+    expect(empty.active).toBe(false);
+    expect(isTrackedProcessRecoverySnapshotCurrent(empty)).toBe(true);
+    const session = { id: "recovery-process-generation", agentId: "main",
+      sessionKey: key, backgrounded: false } as ProcessSession;
+    addSession(session);
+    const occupied = readTrackedProcessRecoverySnapshot("main", key);
+    try {
+      expect(occupied.active).toBe(true);
+      expect(occupied.instance).toBe(empty.instance);
+      expect(occupied.version).not.toBe(empty.version);
+      expect(isTrackedProcessRecoverySnapshotCurrent(empty)).toBe(false);
+      expect(() => addSession({ ...session } as ProcessSession)).toThrow(
+        "process session id is already owned");
+      expect(readTrackedProcessRecoverySnapshot("main", key)).toEqual(occupied);
+      // Post-registration metadata edits cannot change the captured owner.
+      session.agentId = "other";
+      session.sessionKey = "agent:other:main";
+      expect(readTrackedProcessRecoverySnapshot("main", key).active).toBe(true);
+      expect(readTrackedProcessRecoverySnapshot("other", key).active).toBe(false);
+      deleteSession(session.id);
+      expect(readTrackedProcessRecoverySnapshot("main", key).active).toBe(true);
+    } finally {
+      settleExecSessionFinalization(session);
+      deleteSession(session.id);
+    }
+    const retired = readTrackedProcessRecoverySnapshot("main", key);
+    expect(retired.active).toBe(false);
+    expect(retired.version).not.toBe(empty.version);
+    expect(isTrackedProcessRecoverySnapshotCurrent(occupied)).toBe(false);
+    expect(isTrackedProcessRecoverySnapshotCurrent({ ...retired, instance: "old-gateway" }))
+      .toBe(false);
+  });
+
+  it("vetoes a process whose agent or session attribution is missing", () => {
+    for (const [index, owner] of [
+      { agentId: undefined, sessionKey: key },
+      { agentId: "main", sessionKey: undefined },
+      { agentId: undefined, sessionKey: undefined },
+    ].entries()) {
+      const session = { id: `recovery-ambiguous-${index}`, ...owner,
+        backgrounded: false } as ProcessSession;
+      addSession(session);
+      try {
+        expect(hasTrackedProcessForRecoverySession("main", key)).toBe(true);
+      } finally {
+        settleExecSessionFinalization(session);
+        deleteSession(session.id);
+      }
+    }
   });
 
   it("includes an unbackgrounded or finalizing process but never infers clear", () => {
