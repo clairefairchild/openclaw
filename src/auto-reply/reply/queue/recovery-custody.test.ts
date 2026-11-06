@@ -9,6 +9,8 @@ const broker = vi.hoisted(() => ({
   reserve: vi.fn(),
   start: vi.fn(),
   settle: vi.fn(),
+  steerHandoff: vi.fn(),
+  readWork: vi.fn(),
 }));
 vi.mock("../../../state/run-recovery-queue-coordinator-broker.js", () => ({
   getRecoveryQueueCoordinatorBroker: async () => broker,
@@ -20,6 +22,7 @@ import {
   carryFollowupRecoveryWork,
   followupRecoverySources,
   reserveFollowupRunRecoveryWork,
+  recordFollowupSteerHandoff,
   settleFollowupRunRecoveryWork,
   startFollowupRunRecoveryWork,
 } from "./recovery-custody.js";
@@ -30,6 +33,8 @@ beforeEach(() => {
   broker.reserve.mockReset().mockResolvedValue("reserved");
   broker.start.mockReset().mockResolvedValue("started");
   broker.settle.mockReset().mockResolvedValue("settled");
+  broker.steerHandoff.mockReset().mockResolvedValue("recorded");
+  broker.readWork.mockReset().mockResolvedValue(undefined);
 });
 
 describe("follow-up durable custody", () => {
@@ -69,6 +74,43 @@ describe("follow-up durable custody", () => {
     const workId = broker.reserve.mock.calls[0]?.[0].workId;
     expect(broker.start).toHaveBeenCalledWith(workId);
     expect(broker.settle).toHaveBeenCalledWith(workId, `terminal:run-1:completed:${workId}`);
+  });
+
+  it("reconciles an ambiguous accepted handoff by exact work ID without settlement", async () => {
+    const source = run("steered source");
+    const steer = {
+      sourceTurnId: "channel:message-1",
+      targetRunId: "active-run-1",
+      routeJson: JSON.stringify({ channel: "webchat", to: "original-conversation" }),
+    };
+    await reserveFollowupRunRecoveryWork(source, steer);
+    const reservation = broker.reserve.mock.calls[0]?.[0];
+    expect(reservation.scope).toEqual({
+      kind: "exact", agentId: source.run.agentId, sessionId: source.run.sessionId,
+    });
+    broker.steerHandoff.mockRejectedValueOnce(new Error("ack lost"));
+    broker.readWork.mockResolvedValueOnce({ steer: { ...steer, outcome: "accepted" } });
+    await recordFollowupSteerHandoff(source, "accepted");
+    expect(broker.steerHandoff).toHaveBeenCalledWith(reservation.workId, "accepted");
+    expect(broker.readWork).toHaveBeenCalledWith(reservation.workId);
+    expect(broker.settle).not.toHaveBeenCalled();
+    await expect(recordFollowupSteerHandoff(source, "indeterminate"))
+      .rejects.toThrow("outcome changed");
+  });
+
+  it("fails closed when an indeterminate handoff cannot be read back", async () => {
+    const source = run("uncertain source");
+    const steer = {
+      sourceTurnId: "channel:message-2",
+      targetRunId: "active-run-2",
+      routeJson: JSON.stringify({ channel: "webchat", to: "original-conversation" }),
+    };
+    await reserveFollowupRunRecoveryWork(source, steer);
+    broker.steerHandoff.mockRejectedValueOnce(new Error("write unknown"));
+    await expect(recordFollowupSteerHandoff(source, "indeterminate"))
+      .rejects.toThrow("write unknown");
+    expect(broker.settle).not.toHaveBeenCalled();
+    expect(broker.reserve.mock.calls[0]?.[0].steer).toEqual(steer);
   });
 
   it("keeps accepted overflow and cleared queue work unresolved", async () => {

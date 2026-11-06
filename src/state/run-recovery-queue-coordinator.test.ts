@@ -14,6 +14,7 @@ import {
   prepareRecoveryClaimIntent,
   readRecoveryQueueIncarnation,
   readRecoveryQueueWork,
+  recordRecoverySteerHandoff,
   reserveRecoveryQueueWork,
   settleRecoveryQueueWork,
   startRecoveryQueueWork,
@@ -89,6 +90,57 @@ describe("durable recovery queue admission", () => {
       .toThrow("incarnation changed");
     // This exact-ID readback never sets a producer migration marker.
     expect(reopened.prepare("SELECT queue_kind FROM recovery_queue_cutovers").all()).toEqual([]);
+  });
+
+  it("retains accepted and indeterminate source-to-target custody across restart without settlement", () => {
+    const f = fixture();
+    const source = {
+      sourceTurnId: "channel:source-1",
+      targetRunId: "active-run-1",
+      routeJson: JSON.stringify({ channel: "webchat", to: "original-conversation" }),
+    };
+    reserveRecoveryQueueWork(f.db, { ...f.exact("accepted-steer"), steer: source });
+    reserveRecoveryQueueWork(f.db, { ...f.exact("indeterminate-steer"), steer: {
+      ...source, sourceTurnId: "channel:source-2",
+    } });
+    const reopened = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(reopened);
+    expect(readRecoveryQueueWork(reopened, f.incarnation, "accepted-steer")?.steer)
+      .toEqual({ ...source, outcome: "parked" });
+    expect(recordRecoverySteerHandoff(reopened, f.incarnation, "accepted-steer", "accepted"))
+      .toBe("recorded");
+    expect(recordRecoverySteerHandoff(reopened, f.incarnation, "accepted-steer", "accepted"))
+      .toBe("repeated");
+    expect(recordRecoverySteerHandoff(reopened, f.incarnation, "indeterminate-steer", "indeterminate"))
+      .toBe("recorded");
+    expect(() => recordRecoverySteerHandoff(reopened, f.incarnation, "accepted-steer", "indeterminate"))
+      .toThrow("outcome changed");
+    const again = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(again);
+    expect(readRecoveryQueueWork(again, f.incarnation, "accepted-steer")).toMatchObject({
+      state: "queued", terminalReceiptId: null,
+      steer: { ...source, outcome: "accepted" },
+    });
+    expect(readRecoveryQueueWork(again, f.incarnation, "indeterminate-steer")?.steer?.outcome)
+      .toBe("indeterminate");
+    expect(again.prepare("SELECT queue_kind FROM recovery_queue_cutovers").all()).toEqual([]);
+  });
+
+  it("keeps a rejected steer parked for fallback and refuses ambiguous source changes", () => {
+    const f = fixture();
+    const source = {
+      sourceTurnId: "channel:rejected",
+      targetRunId: "active-run",
+      routeJson: JSON.stringify({ channel: "webchat", to: "original" }),
+    };
+    reserveRecoveryQueueWork(f.db, { ...f.exact("rejected-steer"), steer: source });
+    expect(readRecoveryQueueWork(f.db, f.incarnation, "rejected-steer")?.steer?.outcome)
+      .toBe("parked");
+    expect(() => reserveRecoveryQueueWork(f.db, { ...f.exact("rejected-steer"),
+      steer: { ...source, sourceTurnId: "another-source" } }))
+      .toThrow("steer custody changed");
+    expect(readRecoveryQueueWork(f.db, f.incarnation, "rejected-steer")?.state)
+      .toBe("queued");
   });
 
   it("holds exact and unmarked work, including after restart, and settles idempotently", () => {

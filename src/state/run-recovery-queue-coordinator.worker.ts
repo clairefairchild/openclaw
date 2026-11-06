@@ -10,6 +10,7 @@ import {
   type RecoveryClaimOutboxRow,
   readRecoveryQueueIncarnation,
   readRecoveryQueueWork,
+  recordRecoverySteerHandoff,
   reserveRecoveryQueueWork,
   settleRecoveryQueueWork,
   startRecoveryQueueWork,
@@ -41,6 +42,10 @@ export type RecoveryQueueWorkerOperations = {
   "recoveryQueue.start": {
     input: { incarnation: string; workId: string };
     output: "started" | "repeated";
+  };
+  "recoveryQueue.steerHandoff": {
+    input: { incarnation: string; workId: string; outcome: "accepted" | "indeterminate" };
+    output: "recorded" | "repeated";
   };
   "recoveryQueue.settle": {
     input: { incarnation: string; workId: string; terminalReceiptId: string };
@@ -78,6 +83,10 @@ export function createSqliteWorkerBackend(
           return reserveRecoveryQueueWork(db, command.input, authority);
         case "recoveryQueue.start":
           return startRecoveryQueueWork(db, command.input.incarnation, command.input.workId, authority);
+        case "recoveryQueue.steerHandoff":
+          return recordRecoverySteerHandoff(
+            db, command.input.incarnation, command.input.workId, command.input.outcome, authority,
+          );
         case "recoveryQueue.settle":
           return settleRecoveryQueueWork(
             db, command.input.incarnation, command.input.workId, command.input.terminalReceiptId, authority,

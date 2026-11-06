@@ -198,6 +198,11 @@ export async function openRecoveryQueueCoordinatorBroker(
       write((scope) => scope.execute({ type: "recoveryQueue.reserve", input: { ...work, incarnation } })),
     start: (workId: string) =>
       write((scope) => scope.execute({ type: "recoveryQueue.start", input: { incarnation, workId } })),
+    steerHandoff: (workId: string, outcome: "accepted" | "indeterminate") =>
+      write((scope) => scope.execute({
+        type: "recoveryQueue.steerHandoff",
+        input: { incarnation, workId, outcome },
+      })),
     settle: (workId: string, terminalReceiptId: string) =>
       write((scope) => scope.execute({
         type: "recoveryQueue.settle",

@@ -1,6 +1,7 @@
 // Enqueues follow-up reply runs and schedules queue drains.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import type { RecoverySteerSource } from "../../../state/run-recovery-queue-coordinator.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
@@ -27,6 +28,7 @@ import {
   beginFollowupPublication,
   carryFollowupRecoveryWork,
   reserveFollowupRunRecoveryWork,
+  recordFollowupSteerHandoff,
   settleFollowupRunRecoveryWork,
 } from "./recovery-custody.js";
 import {
@@ -239,8 +241,9 @@ export async function enqueueFollowupWithRecoveryReservation(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
   options: EnqueueFollowupRunOptions = {},
+  steer?: RecoverySteerSource,
 ): Promise<boolean> {
-  await reserveFollowupRunRecoveryWork(run);
+  await reserveFollowupRunRecoveryWork(run, steer);
   const firstPublicationAttempt = beginFollowupPublication(run);
   const enqueued = publishFollowupRun(
     key, run, settings, dedupeMode, runFollowup, restartIfIdle, options,
@@ -420,6 +423,7 @@ type ParkedSteerReservation = {
   accepted: (accepted: boolean) => void;
   fallback: () => void;
   consume: (disposition?: "consumed") => void;
+  handoff: (outcome: "accepted" | "indeterminate") => Promise<void>;
 };
 
 export function parkSteerCandidate(
@@ -436,7 +440,7 @@ export function parkSteerCandidate(
   })) {
     return undefined;
   }
-  return createParkedSteerReservation(key, run);
+  return createParkedSteerReservation(key, run, false);
 }
 
 export async function parkSteerCandidateWithRecoveryReservation(
@@ -444,9 +448,10 @@ export async function parkSteerCandidateWithRecoveryReservation(
   run: FollowupRun,
   settings: QueueSettings,
   runFollowup: (run: FollowupRun) => Promise<void>,
+  steer: RecoverySteerSource,
 ): Promise<ParkedSteerReservation | undefined> {
   if (!await enqueueFollowupWithRecoveryReservation(
-    key, run, settings, "message-id", runFollowup, false, { steerCandidate: true },
+    key, run, settings, "message-id", runFollowup, false, { steerCandidate: true }, steer,
   )) {
     return undefined;
   }
@@ -456,6 +461,7 @@ export async function parkSteerCandidateWithRecoveryReservation(
 function createParkedSteerReservation(
   key: string,
   run: FollowupRun,
+  durable = true,
 ): ParkedSteerReservation {
   logMessageQueuedWithBacklogPolicy(
     {
@@ -491,6 +497,7 @@ function createParkedSteerReservation(
     accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
     fallback: () => settleParkedSteerAcceptance(key, run, false),
     consume: (disposition) => consumeParkedFollowupRun(key, run, disposition),
+    handoff: durable ? (outcome) => recordFollowupSteerHandoff(run, outcome) : async () => {},
   };
 }
 

@@ -25,6 +25,15 @@ export type RecoveryQueueReservation = {
   workId: string;
   queue: RecoveryQueueKind;
   scope: RecoveryWorkScope;
+  steer?: RecoverySteerSource;
+};
+export type RecoverySteerSource = {
+  sourceTurnId: string;
+  targetRunId: string | null;
+  routeJson: string;
+};
+export type RecoverySteerCustody = RecoverySteerSource & {
+  outcome: "parked" | "accepted" | "indeterminate";
 };
 export type RecoveryQueueWorkReadback = {
   workId: string;
@@ -32,6 +41,7 @@ export type RecoveryQueueWorkReadback = {
   scope: RecoveryWorkScope;
   state: "queued" | "in_flight" | "settled";
   terminalReceiptId: string | null;
+  steer?: RecoverySteerCustody;
 };
 export type RecoveryClaimIdentity = {
   incarnation: string;
@@ -153,6 +163,13 @@ export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync, author
       );
       CREATE INDEX IF NOT EXISTS recovery_queue_unresolved ON recovery_queue_reservations
         (state, scope_kind, agent_id, session_id);
+      CREATE TABLE IF NOT EXISTS recovery_steer_custody (
+        work_id TEXT PRIMARY KEY,
+        source_turn_id TEXT NOT NULL,
+        target_run_id TEXT,
+        route_json TEXT NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('parked', 'accepted', 'indeterminate'))
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS recovery_claim_outbox (
         claim_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -214,7 +231,14 @@ function assertRecoveryQueueLedgerKnown(db: DatabaseSync): void {
     state IS NULL OR state NOT IN ('prepared', 'invalidated')
     OR trim(agent_id) = '' OR trim(session_id) = '' OR trim(obligation_id) = ''
     OR trim(generation) = '' LIMIT 1`).get();
-  if (invalidCutover || invalidReservation || invalidIntent || invalidOutbox) {
+  const invalidSteer = db.prepare(`SELECT 1 FROM recovery_steer_custody c
+    LEFT JOIN recovery_queue_reservations r ON r.work_id = c.work_id WHERE
+    r.work_id IS NULL OR r.queue_kind <> 'followup' OR r.scope_kind <> 'exact'
+    OR trim(c.source_turn_id) = '' OR trim(c.route_json) = ''
+    OR c.outcome NOT IN ('parked', 'accepted', 'indeterminate')
+    OR (c.outcome <> 'parked' AND (c.target_run_id IS NULL OR trim(c.target_run_id) = ''))
+    LIMIT 1`).get();
+  if (invalidCutover || invalidReservation || invalidIntent || invalidOutbox || invalidSteer) {
     throw new Error("Recovery queue coordinator contains unknown custody state");
   }
 }
@@ -237,6 +261,17 @@ function readReservation(db: DatabaseSync, workId: string): ReservationRow | und
     .get(workId) as ReservationRow | undefined; // sqlite-allow-raw -- Exact reservation lookup.
 }
 
+function readSteerCustody(db: DatabaseSync, workId: string): RecoverySteerCustody | undefined {
+  const row = db.prepare(`SELECT source_turn_id, target_run_id, route_json, outcome
+    FROM recovery_steer_custody WHERE work_id = ?`).get(workId) as
+    | { source_turn_id: string; target_run_id: string | null; route_json: string; outcome: RecoverySteerCustody["outcome"] }
+    | undefined;
+  return row ? {
+    sourceTurnId: row.source_turn_id, targetRunId: row.target_run_id,
+    routeJson: row.route_json, outcome: row.outcome,
+  } : undefined;
+}
+
 /** Exact-ID readback for an uncertain write or a later owner reconciliation.
  * Absence is only an exact ledger fact, never proof that pre-cutover work vanished.
  */
@@ -250,6 +285,7 @@ export function readRecoveryQueueWork(
   if (row.scope_kind === "exact" && (!row.agent_id || !row.session_id)) {
     throw new Error("Recovery queue exact scope is incomplete");
   }
+  const steer = readSteerCustody(db, workId);
   return {
     workId: row.work_id,
     queue: row.queue_kind,
@@ -258,6 +294,7 @@ export function readRecoveryQueueWork(
       : { kind: "exact", agentId: row.agent_id!, sessionId: row.session_id! },
     state: row.state,
     terminalReceiptId: row.terminal_receipt_id,
+    ...(steer ? { steer } : {}),
   };
 }
 
@@ -267,6 +304,17 @@ export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueR
   if (input.scope.kind === "exact") {
     assertIdentity(input.scope.agentId, "agent ID");
     assertIdentity(input.scope.sessionId, "session ID");
+  }
+  if (input.steer) {
+    if (input.queue !== "followup" || input.scope.kind !== "exact") {
+      throw new Error("Steer custody requires exact follow-up scope");
+    }
+    assertIdentity(input.steer.sourceTurnId, "steer source turn ID");
+    assertIdentity(input.steer.routeJson, "steer source route");
+    if (input.steer.targetRunId !== null) {
+      assertIdentity(input.steer.targetRunId, "steer target run ID");
+    }
+    JSON.parse(input.steer.routeJson);
   }
   return writeTransaction<"reserved" | "repeated">(db, authority, () => {
     assertIncarnation(db, input.incarnation);
@@ -278,12 +326,26 @@ export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueR
           existing.agent_id !== agentId || existing.session_id !== sessionId) {
         throw new Error("Recovery queue work ID collision");
       }
+      const recorded = readSteerCustody(db, input.workId);
+      if (JSON.stringify(recorded && {
+        sourceTurnId: recorded.sourceTurnId, targetRunId: recorded.targetRunId,
+        routeJson: recorded.routeJson,
+      }) !== JSON.stringify(input.steer)) {
+        throw new Error("Recovery queue steer custody changed");
+      }
       return "repeated";
     }
     db.prepare(`INSERT INTO recovery_queue_reservations
       (work_id, queue_kind, scope_kind, agent_id, session_id, state, reserved_at)
       VALUES (?, ?, ?, ?, ?, 'queued', ?)`)
       .run(input.workId, input.queue, input.scope.kind, agentId, sessionId, Date.now()); // sqlite-allow-raw -- Parameterized reservation.
+    if (input.steer) {
+      db.prepare(`INSERT INTO recovery_steer_custody
+        (work_id, source_turn_id, target_run_id, route_json, outcome)
+        VALUES (?, ?, ?, ?, 'parked')`)
+        .run(input.workId, input.steer.sourceTurnId, input.steer.targetRunId,
+          input.steer.routeJson); // sqlite-allow-raw -- Atomic source custody.
+    }
     // A new user task must be accepted. Invalidate an earlier recovery intent
     // atomically rather than blocking or losing that task.
     if (input.scope.kind === "unmarked") {
@@ -303,6 +365,26 @@ export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueR
         .run(agentId, sessionId); // sqlite-allow-raw -- Exact work revokes this session's handoff.
     }
     return "reserved";
+  });
+}
+
+/** Accepted or uncertain injection transfers custody, but never proves terminal delivery. */
+export function recordRecoverySteerHandoff(
+  db: DatabaseSync, incarnation: string, workId: string,
+  outcome: "accepted" | "indeterminate", authority?: RecoveryQueueWriteAuthority,
+): "recorded" | "repeated" {
+  return writeTransaction(db, authority, () => {
+    assertIncarnation(db, incarnation);
+    const reservation = readReservation(db, workId);
+    const steer = readSteerCustody(db, workId);
+    if (!reservation || reservation.state === "settled" || !steer?.targetRunId) {
+      throw new Error("Steer handoff has no open exact target custody");
+    }
+    if (steer.outcome === outcome) return "repeated";
+    if (steer.outcome !== "parked") throw new Error("Steer handoff outcome changed");
+    db.prepare("UPDATE recovery_steer_custody SET outcome = ? WHERE work_id = ?")
+      .run(outcome, workId); // sqlite-allow-raw -- Exact source-to-target handoff.
+    return "recorded";
   });
 }
 

@@ -55,6 +55,7 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   const { followupRun, sessionCtx } = params;
   return expectDefined(
     params.restartRecoverySourceTurnId ??
+      followupRun.sourceTurnId ??
       buildChannelSourceTurnId({
         provider:
           followupRun.originatingChannel ?? followupRun.run.messageProvider ?? sessionCtx.Provider,
@@ -101,7 +102,20 @@ export async function runActiveReplySteer(
     activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
       ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
       : undefined;
-  const parked = await parkSteerCandidateWithRecoveryReservation(queueKey, followupRun, resolvedQueue, runFollowup);
+  const sourceTurnId = resolveAcceptedSteerRunId(params);
+  const parked = await parkSteerCandidateWithRecoveryReservation(
+    queueKey, followupRun, resolvedQueue, runFollowup, {
+      sourceTurnId,
+      targetRunId: injectionTarget?.runId ?? null,
+      routeJson: JSON.stringify({
+        channel: followupRun.originatingChannel ?? sessionCtx.Provider ?? followupRun.run.messageProvider ?? null,
+        to: followupRun.originatingTo ?? sessionCtx.OriginatingTo ?? null,
+        chatId: followupRun.originatingChatId ?? null,
+        accountId: followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId ?? null,
+        threadId: followupRun.originatingThreadId ?? null,
+      }),
+    },
+  );
   if (!parked) {
     releaseAdmissionTicket();
     typing.cleanup();
@@ -139,6 +153,7 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   };
+  let noReplay = false;
   try {
     const admission = await parked.admit();
     if (admission === "cancelled") {
@@ -149,8 +164,8 @@ export async function runActiveReplySteer(
     if (admission === "fallback") {
       return await fallback();
     }
-    if (!injectionTarget) {
-      return await fallback("no injectable reply operation");
+    if (!injectionTarget?.runId) {
+      return await fallback("no exact injectable run ID");
     }
     // A predecessor's admission may wait past this run's terminal delivery.
     // Keep the parked input in the ordered queue if its target is no longer eligible.
@@ -217,7 +232,7 @@ export async function runActiveReplySteer(
       ...(followupRun.imageOrder?.length ? { imageOrder: followupRun.imageOrder } : {}),
       ...(followupRun.media?.length ? { media: followupRun.media } : {}),
       waitForTranscriptCommit: true,
-      queueIdentity: resolveAcceptedSteerRunId(params),
+      queueIdentity: sourceTurnId,
       abortSignal: resolveFollowupAbortSignal(followupRun),
       onQueueAccepted: parked.accepted,
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
@@ -247,9 +262,14 @@ export async function runActiveReplySteer(
     if (finalization.status === "rejected") {
       return await fallback(finalization.outcome.reason);
     }
-    // Accepted or indeterminate input cannot be abandoned for replay, even
-    // when the source's later adoption callback rejects.
-    parked.consume("consumed");
+    // The exact source-to-target handoff is recorded before memory custody
+    // disappears. A failed or ambiguous write cannot authorize queue replay.
+    noReplay = true;
+    try {
+      await parked.handoff(finalization.status);
+    } finally {
+      parked.consume("consumed");
+    }
     if (finalization.status === "indeterminate") {
       typing.cleanup();
       return markReplyPayloadForSourceSuppressionDelivery({
@@ -286,16 +306,16 @@ export async function runActiveReplySteer(
     typing.cleanup();
     return "handled";
   } catch (error) {
-    if (resolveFollowupAbortSignal(followupRun)?.aborted) {
-      parked.consume();
+    if (noReplay || resolveFollowupAbortSignal(followupRun)?.aborted) {
+      parked.consume(noReplay ? "consumed" : undefined);
     } else {
       parked.fallback();
     }
     throw error;
   } finally {
     if (followupRun.steerPending) {
-      if (resolveFollowupAbortSignal(followupRun)?.aborted) {
-        parked.consume();
+      if (noReplay || resolveFollowupAbortSignal(followupRun)?.aborted) {
+        parked.consume(noReplay ? "consumed" : undefined);
       } else {
         parked.fallback();
       }

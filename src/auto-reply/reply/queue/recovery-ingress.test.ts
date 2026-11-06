@@ -48,7 +48,7 @@ assert.equal(await enqueueFollowupWithRecoveryReservation('final-retry-key', fin
 const sourceRetry = createRun('source-retry');
 assert.equal(await enqueueFollowupWithRecoveryReservation('source-retry-key', sourceRetry, retrySettings, 'none', runFollowup, false, { position: 'front' }), true);
 const steered = createRun('steered');
-const parked = await parkSteerCandidateWithRecoveryReservation('steer-key', steered, retrySettings, runFollowup);
+const parked = await parkSteerCandidateWithRecoveryReservation('steer-key', steered, retrySettings, runFollowup, { sourceTurnId: 'source-steered', targetRunId: 'target-run', routeJson: JSON.stringify({ channel: 'webchat', to: 'local' }) });
 assert.ok(parked);
 assert.equal(getExistingFollowupQueue('steer-key')?.items[0], steered);
 assert.equal(steered.steerPending?.phase, 'waiting');

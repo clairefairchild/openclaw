@@ -1,11 +1,18 @@
 /** Durable custody of follow-up identities accepted by the in-memory publisher. */
 import { randomUUID } from "node:crypto";
 import { getRecoveryQueueCoordinatorBroker } from "../../../state/run-recovery-queue-coordinator-broker.js";
+import type { RecoverySteerSource } from "../../../state/run-recovery-queue-coordinator.js";
 import type { FollowupRun } from "./types.js";
 
 // The ledger, not this process-local index, is authoritative. Lost indexes after
 // restart leave ledger reservations unresolved until an explicit reconciliation.
-type RecoveryWork = { workId: string; publicationAttempted: boolean; terminalReceipt?: string };
+type RecoveryWork = {
+  workId: string;
+  publicationAttempted: boolean;
+  terminalReceipt?: string;
+  steer?: RecoverySteerSource;
+  steerOutcome?: "accepted" | "indeterminate";
+};
 const work = new WeakMap<FollowupRun, RecoveryWork>();
 const aggregateSources = new WeakMap<FollowupRun, readonly FollowupRun[]>();
 
@@ -37,18 +44,29 @@ export function beginFollowupPublication(run: FollowupRun): boolean {
   return firstAttempt;
 }
 
-export async function reserveFollowupRunRecoveryWork(run: FollowupRun): Promise<void> {
+export async function reserveFollowupRunRecoveryWork(
+  run: FollowupRun, steer?: RecoverySteerSource,
+): Promise<void> {
   let sourceWork = work.get(run);
   if (!sourceWork) {
-    sourceWork = { workId: randomUUID(), publicationAttempted: false };
+    sourceWork = { workId: randomUUID(), publicationAttempted: false, steer };
     work.set(run, sourceWork);
   }
   if (sourceWork.terminalReceipt) {
     throw new Error("Follow-up recovery work already has a terminal attempt");
   }
+  if (steer && JSON.stringify(steer) !== JSON.stringify(sourceWork.steer)) {
+    throw new Error("Follow-up steer source changed");
+  }
   const broker = await getRecoveryQueueCoordinatorBroker();
   // A repeated exact reservation reconciles an uncertain broker acknowledgment.
-  await broker.reserve({ workId: sourceWork.workId, queue: "followup", scope: { kind: "unmarked" } });
+  await broker.reserve({
+    workId: sourceWork.workId, queue: "followup",
+    scope: sourceWork.steer
+      ? { kind: "exact", agentId: run.run.agentId, sessionId: run.run.sessionId }
+      : { kind: "unmarked" },
+    ...(sourceWork.steer ? { steer: sourceWork.steer } : {}),
+  });
 }
 
 export async function startFollowupRunRecoveryWork(run: FollowupRun): Promise<void> {
@@ -81,4 +99,31 @@ export async function settleFollowupRunRecoveryWork(
   sourceWork.terminalReceipt = receipt;
   const broker = await getRecoveryQueueCoordinatorBroker();
   await broker.settle(sourceWork.workId, receipt);
+}
+
+/** Keep the parked work unresolved until a real terminal receipt is observed. */
+export async function recordFollowupSteerHandoff(
+  run: FollowupRun, outcome: "accepted" | "indeterminate",
+): Promise<void> {
+  const sourceWork = work.get(run);
+  if (!sourceWork?.steer?.targetRunId || sourceWork.terminalReceipt) {
+    throw new Error("Steer handoff has no open exact target custody");
+  }
+  if (sourceWork.steerOutcome && sourceWork.steerOutcome !== outcome) {
+    throw new Error("Steer handoff outcome changed");
+  }
+  const broker = await getRecoveryQueueCoordinatorBroker();
+  try {
+    await broker.steerHandoff(sourceWork.workId, outcome);
+  } catch (error) {
+    // A lost write acknowledgment is reconciled by the same exact work ID.
+    const row = await broker.readWork(sourceWork.workId);
+    if (row?.steer?.outcome !== outcome ||
+        row.steer.sourceTurnId !== sourceWork.steer.sourceTurnId ||
+        row.steer.targetRunId !== sourceWork.steer.targetRunId ||
+        row.steer.routeJson !== sourceWork.steer.routeJson) {
+      throw error;
+    }
+  }
+  sourceWork.steerOutcome = outcome;
 }

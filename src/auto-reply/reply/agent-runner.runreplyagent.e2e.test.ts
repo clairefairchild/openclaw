@@ -12,6 +12,7 @@ import {
   sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../../agents/agent-command-restart-recovery.js";
+import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import {
@@ -125,12 +126,14 @@ const parkedSteer = vi.hoisted(() => {
   const accepted = vi.fn();
   const fallback = vi.fn();
   const consume = vi.fn();
+  const handoff = vi.fn(async () => {});
   return {
     admit,
     accepted,
     fallback,
     consume,
-    park: vi.fn(() => ({ admit, accepted, fallback, consume })),
+    handoff,
+    park: vi.fn(() => ({ admit, accepted, fallback, consume, handoff })),
   };
 });
 
@@ -362,12 +365,14 @@ beforeEach(() => {
   parkedSteer.accepted.mockReset();
   parkedSteer.fallback.mockReset();
   parkedSteer.consume.mockReset();
+  parkedSteer.handoff.mockReset().mockResolvedValue(undefined);
   parkedSteer.park.mockReset();
   parkedSteer.park.mockReturnValue({
     admit: parkedSteer.admit,
     accepted: parkedSteer.accepted,
     fallback: parkedSteer.fallback,
     consume: parkedSteer.consume,
+    handoff: parkedSteer.handoff,
   });
   vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation).mockReset().mockResolvedValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
@@ -1094,6 +1099,31 @@ describe("runReplyAgent active steering", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("records indeterminate steering custody without replay", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main", sessionId: "session", resetTriggered: false,
+    });
+    active.setPhase("running");
+    state.queueEmbeddedAgentMessageMock.mockRejectedValueOnce(
+      new QuestionAnswerUnconfirmedError(new Error("answer receipt unavailable")),
+    );
+    const { run } = createMinimalRun({
+      activeBackendRunId: "active-run",
+      isActive: true,
+      shouldSteer: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "steer",
+    });
+    try {
+      await run();
+      expect(parkedSteer.handoff).toHaveBeenCalledWith("indeterminate");
+      expect(parkedSteer.consume).toHaveBeenCalledOnce();
+      expect(parkedSteer.fallback).not.toHaveBeenCalled();
+    } finally {
+      active.complete();
+    }
+  });
+
   it("falls back visibly when the active CLI backend cannot accept injection", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
@@ -1177,6 +1207,7 @@ describe("runReplyAgent active steering", () => {
 
     expect(events).toEqual(["transcript-committed", "adopted"]);
     expect(onAdopted).toHaveBeenCalledOnce();
+    expect(parkedSteer.handoff).toHaveBeenCalledWith("accepted");
     expect(parkedSteer.consume).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
     const transcript = await loadTranscriptEvents({
