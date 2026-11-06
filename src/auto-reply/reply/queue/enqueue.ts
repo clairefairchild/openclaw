@@ -1,4 +1,5 @@
 // Enqueues follow-up reply runs and schedules queue drains.
+import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
@@ -7,6 +8,7 @@ import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { openRecoveryQueueCoordinatorBroker } from "../../../state/run-recovery-queue-coordinator-broker.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -206,6 +208,37 @@ export function enqueueFollowupRun(
     front: options.position === "front",
   });
   return true;
+}
+
+// This first ingress cutover covers the active-run followup producer only. A
+// Gateway-owned broker remains open for the process lifetime; an ambiguous
+// reserve error is held and never retried as a new publication.
+let ingressBroker: ReturnType<typeof openRecoveryQueueCoordinatorBroker> | undefined;
+const ingressWorkIds = new WeakMap<FollowupRun, string>();
+
+export async function enqueueActiveRunFollowupWithRecoveryReservation(
+  key: string,
+  run: FollowupRun,
+  settings: QueueSettings,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<boolean> {
+  ingressBroker ??= openRecoveryQueueCoordinatorBroker();
+  const broker = await ingressBroker;
+  let workId = ingressWorkIds.get(run);
+  if (!workId) {
+    workId = randomUUID();
+    ingressWorkIds.set(run, workId);
+  }
+  // The runner's session can be rebound after this point. Until canonical
+  // incarnation proof is wired, conservative global scope fences every claim.
+  await broker.reserve({ workId, queue: "followup", scope: { kind: "unmarked" } });
+  // If publication throws, it may already have taken custody. Keep the row
+  // unresolved. A definite rejection is the only safe rollback here.
+  const enqueued = enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false);
+  if (!enqueued) {
+    await broker.settle(workId, `rejected:${workId}`);
+  }
+  return enqueued;
 }
 
 function applyFollowupQueueOverflow(

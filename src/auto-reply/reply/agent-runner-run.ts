@@ -54,7 +54,7 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueActiveRunFollowupWithRecoveryReservation, scheduleFollowupDrain } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
@@ -387,13 +387,11 @@ export async function runReplyAgent(
 
   if (activeRunQueueAction === "enqueue-followup") {
     bindQueueDisposition();
-    const enqueued = enqueueFollowupRun(
+    const enqueued = await enqueueActiveRunFollowupWithRecoveryReservation(
       queueKey,
       followupRun,
       resolvedQueue,
-      "message-id",
       queuedRunFollowupTurn,
-      false,
     );
     if (!enqueued) {
       releaseAdmissionTicket();
