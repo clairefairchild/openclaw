@@ -2052,3 +2052,10 @@ without `preflight-agent` remain unsupported; installing a newer CLI elsewhere
 does not make those payloads compatible. Runtime/package identity and serving
 health are separate checks from database compatibility. A successful read-only
 preflight does not authorize checkpoint replay or replacement of live databases.
+
+The run-recovery coordinator's additive claim/outbox bridge is documented in
+[Gateway Run recovery queue coordinator](/reference/run-recovery-queue-coordinator).
+It is the single durable owner of claim and accepted recovery input; the agent-local
+pending-input row is a consumer projection and admission fence. Existing coordinator
+rows remain intact on upgrade and rollback. Unknown or ambiguous handoff state
+retains custody by immutable idempotency key and cannot authorize a second send.

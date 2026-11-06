@@ -72,3 +72,44 @@ export function prepareSessionRunRecoveryClaimInWorker(
 ): SessionRunRecoveryClaimResult {
   return { kind: "held", reason: "queue_not_cut_over" };
 }
+
+/** The agent row is only the compatibility fence for the existing pending-input
+ * consumer. The global coordinator remains the claim and outbox authority. */
+export function installSessionRunRecoveryHandoffFence(
+  db: DatabaseSync, expected: SessionRunRecoveryClaimExpected,
+  idempotencyKey: string, claimId: string,
+): void {
+  ensureSessionRunRecoveryClaimsSchema(db);
+  const store = claims(db);
+  const existing = executeSqliteQueryTakeFirstSync(db, store.selectFrom("session_run_recovery_claims")
+    .selectAll().where("session_key", "=", expected.sessionKey)
+    .where("session_id", "=", expected.sessionId));
+  if (existing) {
+    if (existing.claim_id !== claimId || existing.idempotency_key !== idempotencyKey ||
+        existing.database_identity !== expected.databaseIdentity ||
+        existing.database_birthtime !== expected.databaseBirthtime ||
+        existing.execution_id !== expected.executionId || existing.run_id !== expected.runId ||
+        existing.lifecycle_revision !== expected.lifecycleRevision ||
+        existing.lifecycle_generation !== expected.lifecycleGeneration ||
+        existing.owner_epoch !== expected.ownerEpoch ||
+        existing.store_revision !== expected.storeRevision ||
+        existing.source_route_generation !== expected.sourceRouteGeneration ||
+        existing.delivery_digest !== expected.deliveryDigest ||
+        existing.original_input_receipt_id !== expected.originalInputReceiptId ||
+        existing.input_generation !== expected.inputGeneration) {
+      throw new Error("Recovery handoff conflicts with an existing claim fence");
+    }
+    return;
+  }
+  executeSqliteQueryTakeFirstSync(db, store.insertInto("session_run_recovery_claims").values({
+    claim_id: claimId, database_identity: expected.databaseIdentity,
+    database_birthtime: expected.databaseBirthtime, session_key: expected.sessionKey,
+    session_id: expected.sessionId, execution_id: expected.executionId,
+    run_id: expected.runId, lifecycle_revision: expected.lifecycleRevision,
+    lifecycle_generation: expected.lifecycleGeneration, owner_epoch: expected.ownerEpoch,
+    store_revision: expected.storeRevision, source_route_generation: expected.sourceRouteGeneration,
+    delivery_digest: expected.deliveryDigest, original_input_receipt_id: expected.originalInputReceiptId,
+    input_generation: expected.inputGeneration, idempotency_key: idempotencyKey,
+    state: "prepared", prepared_at: Date.now(),
+  }).returning("claim_id"));
+}

@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto";
+import { assertRecoveryClaimHostCurrent } from "../state/run-recovery-queue-coordinator-broker.js";
 import { describe, expect, it } from "vitest";
 import {
   evaluateRunRecoveryFence,
@@ -140,5 +142,51 @@ describe("run recovery fence", () => {
     expect(verifyRunRecoveryReviewToken({
       token: `${token.slice(0, -1)}${token.endsWith("x") ? "y" : "x"}`, snapshot, callerId: "reviewer-1", secret, now: 1000,
     })).toBe(false);
+  });
+});
+
+
+describe("coordinator claim host authority", () => {
+  it("binds fresh source, semantic review, original route, caller and token", () => {
+    const { snapshot, review } = eligible();
+    const route = { kind: "internal" as const };
+    const digest = createHash("sha256").update(JSON.stringify(route)).digest("hex");
+    const expected = {
+      agentId: identity.agentId, databaseIdentity: "physical-1", databaseBirthtime: "birth-1",
+      sessionKey: identity.key, sessionId: identity.sessionId,
+      executionId: identity.executionId, runId: identity.runId,
+      lifecycleRevision: identity.lifecycleRevision, lifecycleGeneration: "life-1",
+      ownerEpoch: identity.ownerEpoch, storeRevision: identity.storeRevision,
+      sourceRouteGeneration: identity.sourceRouteGeneration, deliveryDigest: digest,
+      originalInputReceiptId: identity.originalInputReceiptId, inputGeneration: "input-gen-1",
+    };
+    const input = { incarnation: "incarnation-1", expected, idempotencyKey: "recovery-1",
+      message: { role: "user" as const, content: "Continue", timestamp: 1,
+        idempotencyKey: "recovery-1" }, route };
+    const secret = randomBytes(32);
+    const now = Date.now();
+    const authority = {
+      callerId: "caller-1", reviewSecret: secret,
+      reviewToken: issueRunRecoveryReviewToken({ snapshot, callerId: "caller-1", secret,
+        now, expiresAt: now + 60_000 }), review,
+      readCurrent: () => ({ snapshot, databaseIdentity: "physical-1",
+        databaseBirthtime: "birth-1", lifecycleGeneration: "life-1",
+        inputGeneration: "input-gen-1", deliveryDigest: digest }),
+      assertCallerCurrent: () => {},
+    };
+    expect(() => assertRecoveryClaimHostCurrent(input, authority)).not.toThrow();
+    expect(() => assertRecoveryClaimHostCurrent({ ...input, route: { kind: "internal", to: "changed" } },
+      authority)).toThrow("source generation changed");
+    expect(() => assertRecoveryClaimHostCurrent(input, { ...authority,
+      assertCallerCurrent: () => { throw new Error("caller retired"); } }))
+      .toThrow("caller retired");
+    expect(() => assertRecoveryClaimHostCurrent(input, { ...authority,
+      reviewToken: "stale" })).toThrow("expired");
+    snapshot.custody.laneQueue.complete = false;
+    expect(() => assertRecoveryClaimHostCurrent(input, authority, "admitted"))
+      .toThrow("laneQueue_unknown");
+    snapshot.custody.laneQueue.complete = true;
+    review.obligation = "unknown";
+    expect(() => assertRecoveryClaimHostCurrent(input, authority)).toThrow("unfinished_obligation_unproven");
   });
 });

@@ -5,6 +5,9 @@
  * No producer is cut over yet, so production claim intent is always held.
  */
 import { randomUUID } from "node:crypto";
+import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import { MAX_PAYLOAD_BYTES } from "../gateway/server-constants.js";
+import type { SessionRunRecoveryClaimExpected } from "../config/sessions/session-run-recovery-claim.js";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -85,6 +88,9 @@ export function openRunRecoveryQueueCoordinator(
       // Never recreate a missing identity or table in an existing ledger.
       assertSqliteIntegrity(db, "run recovery queue coordinator");
       assertRecoveryQueueSchema(db);
+      readRecoveryQueueIncarnation(db);
+      // Versionless additive migration: preserve every existing reservation and intent.
+      ensureRunRecoveryQueueCoordinatorSchema(db, authority);
     } else {
       db.exec("PRAGMA journal_mode = WAL;"); // sqlite-allow-raw -- New ledger connection policy.
       ensureRunRecoveryQueueCoordinatorSchema(db, authority);
@@ -140,6 +146,22 @@ export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync, author
       );
       CREATE INDEX IF NOT EXISTS recovery_queue_unresolved ON recovery_queue_reservations
         (state, scope_kind, agent_id, session_id);
+      CREATE TABLE IF NOT EXISTS recovery_claim_outbox (
+        claim_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        obligation_id TEXT NOT NULL,
+        expected_json TEXT NOT NULL,
+        message_json TEXT NOT NULL,
+        route_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('pending', 'handed_off', 'needs_reconciliation')),
+        created_at INTEGER NOT NULL,
+        handed_off_at INTEGER,
+        handoff_input_id TEXT,
+        UNIQUE (agent_id, session_id, idempotency_key),
+        UNIQUE (agent_id, session_id, obligation_id)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS recovery_claim_intents (
         intent_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -177,11 +199,15 @@ function assertRecoveryQueueLedgerKnown(db: DatabaseSync): void {
     OR (scope_kind = 'exact' AND (agent_id IS NULL OR trim(agent_id) = '' OR session_id IS NULL OR trim(session_id) = ''))
     OR (state = 'settled' AND (terminal_receipt_id IS NULL OR trim(terminal_receipt_id) = ''))
     OR (state <> 'settled' AND terminal_receipt_id IS NOT NULL) LIMIT 1`).get();
+  const invalidOutbox = db.prepare(`SELECT 1 FROM recovery_claim_outbox WHERE
+    trim(claim_id) = '' OR trim(agent_id) = '' OR trim(session_id) = '' OR
+    trim(idempotency_key) = '' OR trim(obligation_id) = '' OR state NOT IN ('pending', 'handed_off', 'needs_reconciliation') OR
+    (state = 'handed_off' AND (handed_off_at IS NULL OR trim(handoff_input_id) = '')) LIMIT 1`).get();
   const invalidIntent = db.prepare(`SELECT 1 FROM recovery_claim_intents WHERE
     state IS NULL OR state NOT IN ('prepared', 'invalidated')
     OR trim(agent_id) = '' OR trim(session_id) = '' OR trim(obligation_id) = ''
     OR trim(generation) = '' LIMIT 1`).get();
-  if (invalidCutover || invalidReservation || invalidIntent) {
+  if (invalidCutover || invalidReservation || invalidIntent || invalidOutbox) {
     throw new Error("Recovery queue coordinator contains unknown custody state");
   }
 }
@@ -236,6 +262,14 @@ export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueR
       db.prepare(`UPDATE recovery_claim_intents SET state = 'invalidated', invalidated_at = ?
         WHERE state = 'prepared' AND agent_id = ? AND session_id = ?`)
         .run(Date.now(), agentId, sessionId); // sqlite-allow-raw -- Exact invalidation.
+    }
+    if (input.scope.kind === "unmarked") {
+      db.prepare("UPDATE recovery_claim_outbox SET state = 'needs_reconciliation' WHERE state IN ('pending', 'handed_off')")
+        .run(); // sqlite-allow-raw -- New global work revokes every recovery handoff.
+    } else {
+      db.prepare(`UPDATE recovery_claim_outbox SET state = 'needs_reconciliation'
+        WHERE state IN ('pending', 'handed_off') AND agent_id = ? AND session_id = ?`)
+        .run(agentId, sessionId); // sqlite-allow-raw -- Exact work revokes this session's handoff.
     }
     return "reserved";
   });
@@ -336,5 +370,141 @@ export function prepareRecoveryClaimIntent(
       .run(intentId, identity.agentId, identity.sessionId, identity.obligationId,
         identity.generation, Date.now()); // sqlite-allow-raw -- Atomic claim intent.
     return { kind: "prepared", intentId, repeated: false };
+  });
+}
+
+/** The coordinator is the sole claim and outbox owner. Agent-local pending input is
+ * a delivery projection, never evidence that a second claim may be created. */
+export type RecoveryClaimOutboxInput = {
+  incarnation: string;
+  expected: SessionRunRecoveryClaimExpected;
+  idempotencyKey: string;
+  message: PersistedUserTurnMessage;
+  /** The exact original internal delivery route, not a newly selected channel. */
+  route: { kind: "internal"; [key: string]: unknown };
+};
+export type RecoveryClaimOutboxRow = {
+  claimId: string;
+  expected: SessionRunRecoveryClaimExpected;
+  idempotencyKey: string;
+  message: PersistedUserTurnMessage;
+  route: RecoveryClaimOutboxInput["route"];
+  state: "pending" | "handed_off" | "needs_reconciliation";
+  handoffInputId?: string;
+};
+type StoredOutboxRow = {
+  claim_id: string;
+  agent_id: string;
+  session_id: string;
+  idempotency_key: string;
+  obligation_id: string;
+  expected_json: string;
+  message_json: string;
+  route_json: string;
+  state: RecoveryClaimOutboxRow["state"];
+  handoff_input_id: string | null;
+};
+function outboxRow(row: StoredOutboxRow): RecoveryClaimOutboxRow {
+  return { claimId: row.claim_id,
+    expected: JSON.parse(row.expected_json) as SessionRunRecoveryClaimExpected,
+    idempotencyKey: row.idempotency_key,
+    message: JSON.parse(row.message_json) as PersistedUserTurnMessage,
+    route: JSON.parse(row.route_json) as RecoveryClaimOutboxInput["route"],
+    state: row.state, ...(row.handoff_input_id ? { handoffInputId: row.handoff_input_id } : {}) };
+}
+function readStoredOutbox(db: DatabaseSync, agentId: string, sessionId: string, key: string) {
+  return db.prepare(`SELECT * FROM recovery_claim_outbox
+    WHERE agent_id = ? AND session_id = ? AND idempotency_key = ?`)
+    .get(agentId, sessionId, key) as StoredOutboxRow | undefined; // sqlite-allow-raw -- Immutable exact-key readback.
+}
+/** An ambiguous acknowledgment is reconciled by this immutable key; it is never replayed blind. */
+export function readRecoveryClaimOutbox(db: DatabaseSync, agentId: string, sessionId: string, key: string): RecoveryClaimOutboxRow | undefined {
+  const row = readStoredOutbox(db, agentId, sessionId, key);
+  if (!row) return undefined;
+  assertRecoveryQueueLedgerKnown(db);
+  return outboxRow(row);
+}
+
+/** The caller's authority callback must re-read the exact source, semantic review,
+ * route, and caller at both worker grants, including the one just before COMMIT.
+ * Queue custody and outbox acceptance are compared under this single WAL lock. */
+export function claimRecoveryOutbox(
+  db: DatabaseSync, input: RecoveryClaimOutboxInput,
+  authority: RecoveryQueueWriteAuthority & { assertClaimCurrent(): void },
+): { kind: "prepared"; row: RecoveryClaimOutboxRow; repeated: boolean } |
+   { kind: "held"; reason: "queue_not_cut_over" | "unresolved_work" | "existing_intent" | "existing_claim" | "invalidated" } {
+  const { expected } = input;
+  for (const [label, value] of Object.entries(expected)) {
+    if (label !== "ownerEpoch") {
+      if (typeof value !== "string") throw new Error(`Recovery queue ${label} is required`);
+      assertIdentity(value, label);
+    }
+  }
+  assertIdentity(input.idempotencyKey, "idempotency key");
+  if (input.message.role !== "user" || input.message.idempotencyKey !== input.idempotencyKey ||
+      input.route.kind !== "internal" || !Number.isSafeInteger(expected.ownerEpoch) || expected.ownerEpoch < 0 ||
+      Buffer.byteLength(JSON.stringify(input.message), "utf8") > MAX_PAYLOAD_BYTES) {
+    throw new Error("Recovery outbox has invalid input or route identity");
+  }
+  // Host grants are the current-authority boundary; these are not stale token checks.
+  const checked = { ...authority, assertCurrent: () => {
+    authority.assertCurrent?.();
+    authority.assertClaimCurrent();
+  } };
+  return writeTransaction(db, checked, () => {
+    assertIncarnation(db, input.incarnation);
+    const stored = readStoredOutbox(db, expected.agentId, expected.sessionId, input.idempotencyKey) ??
+      db.prepare(`SELECT * FROM recovery_claim_outbox WHERE agent_id = ? AND session_id = ?
+        AND obligation_id = ?`).get(expected.agentId, expected.sessionId,
+          expected.originalInputReceiptId) as StoredOutboxRow | undefined;
+    if (stored) {
+      const same = stored.expected_json === JSON.stringify(expected) &&
+        stored.message_json === JSON.stringify(input.message) &&
+        stored.route_json === JSON.stringify(input.route);
+      if (!same) return { kind: "held", reason: "existing_claim" };
+      if (stored.state === "needs_reconciliation") return { kind: "held", reason: "invalidated" };
+      return { kind: "prepared", row: outboxRow(stored), repeated: true };
+    }
+    const cutovers = db.prepare("SELECT COUNT(*) AS count FROM recovery_queue_cutovers WHERE queue_kind IN ('followup', 'command-lane')")
+      .get() as { count: number }; // sqlite-allow-raw -- Both producer families required.
+    if (cutovers.count !== 2) return { kind: "held", reason: "queue_not_cut_over" };
+    if (db.prepare(`SELECT 1 FROM recovery_queue_reservations WHERE state <> 'settled' AND
+      (scope_kind = 'unmarked' OR (agent_id = ? AND session_id = ?)) LIMIT 1`)
+      .get(expected.agentId, expected.sessionId)) return { kind: "held", reason: "unresolved_work" };
+    // Stage-1 intents have no accepted input. Never silently adopt one as an outbox.
+    if (db.prepare(`SELECT 1 FROM recovery_claim_intents WHERE agent_id = ? AND session_id = ?
+      AND obligation_id = ? LIMIT 1`).get(expected.agentId, expected.sessionId,
+        expected.originalInputReceiptId)) return { kind: "held", reason: "existing_intent" };
+    const claimId = randomUUID();
+    db.prepare(`INSERT INTO recovery_claim_outbox
+      (claim_id, agent_id, session_id, idempotency_key, obligation_id, expected_json, message_json,
+       route_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+      .run(claimId, expected.agentId, expected.sessionId, input.idempotencyKey,
+        expected.originalInputReceiptId, JSON.stringify(expected), JSON.stringify(input.message), JSON.stringify(input.route), Date.now()); // sqlite-allow-raw -- Single-owner claim and accepted input.
+    return { kind: "prepared", row: { claimId, expected, idempotencyKey: input.idempotencyKey,
+      message: input.message, route: input.route, state: "pending" }, repeated: false };
+  });
+}
+
+/** Called only after exact agent-local pending-input readback. This receipt cannot send. */
+export function recordRecoveryClaimHandoff(
+  db: DatabaseSync, incarnation: string, agentId: string, sessionId: string,
+  idempotencyKey: string, claimId: string, inputId: string, authority?: RecoveryQueueWriteAuthority,
+): RecoveryClaimOutboxRow {
+  assertIdentity(inputId, "handoff input ID");
+  return writeTransaction(db, authority, () => {
+    assertIncarnation(db, incarnation);
+    const stored = readStoredOutbox(db, agentId, sessionId, idempotencyKey);
+    if (!stored || stored.claim_id !== claimId ||
+        (stored.handoff_input_id && stored.handoff_input_id !== inputId)) {
+      throw new Error("Recovery handoff claim changed");
+    }
+    if (stored.state === "pending") {
+      db.prepare(`UPDATE recovery_claim_outbox SET state = 'handed_off', handed_off_at = ?, handoff_input_id = ?
+        WHERE claim_id = ? AND state = 'pending'`).run(Date.now(), inputId, claimId); // sqlite-allow-raw -- Exact handoff acknowledgment.
+    }
+    return stored.state === "pending"
+      ? { ...outboxRow(stored), state: "handed_off", handoffInputId: inputId }
+      : outboxRow(stored);
   });
 }
