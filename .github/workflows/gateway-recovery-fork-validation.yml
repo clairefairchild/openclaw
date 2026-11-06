@@ -14,11 +14,11 @@ jobs:
       - name: Check out exact recovery source commit
         uses: actions/checkout@v4
         with:
-          ref: a9612e98baa6db7c8e01f7ce3415a3d7c12b5ad6
+          ref: c5c5ae3e8445e023f91573feb4cafba46fb07bfa
           persist-credentials: false
 
       - name: Verify source identity
-        run: test "$(git rev-parse HEAD)" = a9612e98baa6db7c8e01f7ce3415a3d7c12b5ad6
+        run: test "$(git rev-parse HEAD)" = c5c5ae3e8445e023f91573feb4cafba46fb07bfa
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -32,6 +32,9 @@ jobs:
 
       - name: Frozen install
         run: pnpm install --frozen-lockfile
+
+      - name: Core typecheck
+        run: pnpm tsgo:core
 
       - name: Focused fence, inspect, and lifecycle tests
         run: >-
@@ -54,6 +57,3 @@ jobs:
           src/state/run-recovery-queue-coordinator.test.ts
           src/state/run-recovery-queue-coordinator-broker.test.ts
           src/auto-reply/reply/queue/recovery-ingress.test.ts
-
-      - name: Core typecheck
-        run: pnpm tsgo:core
