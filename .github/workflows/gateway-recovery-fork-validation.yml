@@ -1,0 +1,48 @@
+name: Gateway recovery fork validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact recovery source commit
+        uses: actions/checkout@v4
+        with:
+          ref: c955774159aebfe65ec68e83f4209314cac3a98b
+          persist-credentials: false
+
+      - name: Verify source identity
+        run: test "$(git rev-parse HEAD)" = c955774159aebfe65ec68e83f4209314cac3a98b
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.5.1
+          run_install: false
+
+      - name: Frozen install
+        run: pnpm install --frozen-lockfile
+
+      - name: Focused fence, inspect, and lifecycle tests
+        run: >-
+          pnpm test
+          src/gateway/session-run-recovery-fence.test.ts
+          src/gateway/session-run-recovery-inspect-service.test.ts
+          src/gateway/server-methods/sessions-recovery-inspect.test.ts
+          src/gateway/session-lifecycle-state.persistence.test.ts
+          src/gateway/session-lifecycle-state.recovery.test.ts
+          src/config/sessions/session-accessor.pending-inputs.test.ts
+
+      - name: Core typecheck
+        run: pnpm tsgo:core
