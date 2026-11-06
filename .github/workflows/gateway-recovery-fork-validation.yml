@@ -39,4 +39,3 @@ jobs:
           src/process/command-queue.test.ts
           src/gateway/server-methods/system-agent-concurrency.test.ts
           src/cron/service.wake-now-real-heartbeat.test.ts
-          src/agents/embedded-agent-runner/run/lane-controller.test.ts

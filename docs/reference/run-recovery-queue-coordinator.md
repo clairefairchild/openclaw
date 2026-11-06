@@ -50,25 +50,28 @@ This does not set the followup cutover marker. Existing in-memory queue contents
 
 No production command-lane caller is switched to the bridge by this stage. The broad command lane has nested, unmarked, timeout, abort, clear, reset, and group-drain paths whose stable work identities and terminal receipts need an owner-by-owner cutover. Existing lane contents are not reconciled. Neither producer cutover marker is written, and recovery remains held with `queue_not_cut_over` (UNKNOWN). Rollback leaves any ledger rows intact for exact-ID reconciliation and reverts only source before deployment.
 
-## Stage 7 command-lane ingress migration (source only, incomplete)
+## Stage 7 limited Gateway command-lane ingress (source only, incomplete)
 
-Production command-lane callers now use one guarded ingress for session placement,
-embedded-run and compaction nesting, context-engine maintenance, cron, system-agent
-RPC, and background work. Each submitted task receives a distinct durable work ID.
-The scope remains conservatively `unmarked` even when a lane name resembles a
-session: a lane or diagnostic task identity does not prove an exact agent/session
-owner. The shared broker reserves before the synchronous queue publication and
-starts before the task callback. A definitive pre-start abort, clear, or draining
-rejection is settled; successful current-generation task completion is settled.
-Task failure, timeout, reset, lost broker acknowledgment, or stale completion
-remains unresolved. Group arbitration uses the same guarded entry, so a group
-drain cannot bypass the start fence.
+The Gateway-owned system-agent RPC and cron manual-run command-lane callers use
+the guarded ingress. Each submitted task receives a distinct durable work ID
+with conservative `unmarked` scope, reserved before queue publication. The
+bridge starts before task effects, settles definitive pre-start rejection and
+successful current-generation task completion, and retains failure, timeout,
+reset, lost acknowledgment, or stale completion for reconciliation.
 
-This is not a cutover marker or live migration. The direct queue remains for
-internal tests, and any pre-existing in-memory work at the eventual deploy
-boundary has no durable work ID. Its custody cannot be inferred from an empty
-snapshot after restart. Before setting the command-lane marker, reconcile those
-legacy tasks from authoritative owner receipts, audit every production enqueue
-entry point again, and prove terminal receipts for each owner (especially tasks
-that schedule downstream work). Retain all unresolved rows for exact-ID review.
-The global recovery claim remains held with `queue_not_cut_over`.
+The broader production caller migration is **blocked**. An exact-source caller
+suite showed embedded agent lane admission executes in an application worker.
+That worker cannot open the coordinator's SQLite store: the host broker
+connection is required, and `openSqliteWorkerStore` explicitly refuses a
+non-main-thread open. Do not mock, bypass, or weaken that boundary. Embedded
+run, compaction, session placement, context-engine maintenance, and generic
+background-work callers therefore remain on the original command lane until a
+reviewed worker-to-host coordinator route is available. The isolated source
+branch is not a deployable complete cutover.
+
+No command-lane producer marker is written. Pre-existing in-memory queue work
+at a future deployment boundary has no durable work ID and cannot be cleared
+from an empty snapshot after restart. Its authoritative owner receipts, as
+well as abort, clear, group drain, timeout, and downstream terminal receipts,
+need reconciliation before the marker can be set. Retain all unresolved ledger
+rows for exact-ID review. Recovery remains held with `queue_not_cut_over`.
