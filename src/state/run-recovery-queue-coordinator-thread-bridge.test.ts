@@ -33,7 +33,7 @@ assert.equal(host, 'reserved');
 const worker = await runWorker('stable-worker-id', connection);
 assert.deepEqual(worker, { hostRefused: false, first: 'reserved', repeated: 'repeated', started: 'started', settled: 'settled' });
 const db = new DatabaseSync(root + '/run-recovery-queue-coordinator.sqlite');
-assert.deepEqual(db.prepare('SELECT work_id, state FROM recovery_queue_reservations ORDER BY work_id').all(), [
+assert.deepEqual(db.prepare('SELECT work_id, state FROM recovery_queue_reservations ORDER BY work_id').all().map((row) => ({ ...row })), [
   { work_id: 'host-work', state: 'queued' },
   { work_id: 'stable-worker-id', state: 'settled' },
 ]);
