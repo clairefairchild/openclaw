@@ -30,6 +30,11 @@ import {
   type FollowupRun,
 } from "./queue.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
+import {
+  followupRecoverySources,
+  startFollowupRunRecoveryWork,
+  settleFollowupRunRecoveryWork,
+} from "./queue/recovery-custody.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 type FollowupDrainDisposition =
@@ -90,10 +95,14 @@ export function createFollowupRunner(
   const defaults = { ...initialDefaults, resolveGatewayContext };
   // Every queue handoff, including delivery retries, retains this host owner
   // without borrowing the invoking turn's request-local authority.
-  const runFollowup = (queued: FollowupRun): Promise<void> =>
-    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
+  const runFollowup = async (queued: FollowupRun): Promise<void> => {
+    // The broker start must commit before admission or model/tool effects. An
+    // uncertain acknowledgment refuses execution and leaves the queue retryable.
+    await startFollowupRunRecoveryWork(queued);
+    await withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
       inheritRequestScope: false,
     });
+  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
@@ -104,6 +113,7 @@ export function createFollowupRunner(
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let queuedFollowupAdmitted = false;
+    let terminalCustodyConfirmed = false;
     const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
@@ -251,6 +261,8 @@ export function createFollowupRunner(
       });
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
+      // A source retry is a committed durable handoff to its own reservation.
+      terminalCustodyConfirmed = delivery.kind === "completed" || delivery.kind === "source-retry";
     } catch (error) {
       let operatorAuthorityLost = false;
       try {
@@ -296,6 +308,7 @@ export function createFollowupRunner(
             completion,
           });
         } catch (error) {
+          terminalCustodyConfirmed = false;
           defaultRuntime.error?.(
             `followup queue: completion delivery failed; refusing replay: ${formatErrorMessage(error)}`,
           );
@@ -306,6 +319,15 @@ export function createFollowupRunner(
         if (queuedFollowupAdmitted) {
           await settleQueuedFollowupPresentation(defaults.opts?.onQueuedFollowupSettled);
         }
+      } catch (error) {
+        if (disposition.kind !== "consumed") {
+          throw error;
+        }
+        // Presentation cleanup is not a reason to replay consumed model work.
+        defaultRuntime.error?.(
+          `followup queue: presentation settlement failed after consumption: ${formatErrorMessage(error)}`,
+        );
+        operation?.fail("run_failed", error);
       } finally {
         progressContinuation?.close();
       }
@@ -325,6 +347,21 @@ export function createFollowupRunner(
         }
       } else if (disposition.kind === "retry" && admittedRunId) {
         clearAgentRunContext(admittedRunId);
+      }
+      if (disposition.kind === "consumed" && terminalCustodyConfirmed && admittedRunId) {
+        try {
+          await Promise.all(
+            followupRecoverySources(queued).map((source) =>
+              settleFollowupRunRecoveryWork(source, `terminal:${admittedRunId}:${completion.kind}`),
+            ),
+          );
+        } catch (error) {
+          // Terminal work must not replay model/tool effects after a broker error.
+          // The unresolved reservation remains a conservative recovery veto.
+          defaultRuntime.error?.(
+            `followup queue: terminal custody settlement uncertain: ${formatErrorMessage(error)}`,
+          );
+        }
       }
       operation?.complete();
       defaults.typing.markRunComplete();

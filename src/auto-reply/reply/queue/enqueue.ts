@@ -1,5 +1,4 @@
 // Enqueues follow-up reply runs and schedules queue drains.
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
@@ -8,7 +7,6 @@ import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { getRecoveryQueueCoordinatorBroker } from "../../../state/run-recovery-queue-coordinator-broker.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -25,6 +23,12 @@ import {
   rememberFollowupDrainCallback,
 } from "./drain.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
+import {
+  beginFollowupPublication,
+  carryFollowupRecoveryWork,
+  reserveFollowupRunRecoveryWork,
+  settleFollowupRunRecoveryWork,
+} from "./recovery-custody.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -227,10 +231,6 @@ export function enqueueFollowupRun(
   return publishFollowupRun(key, run, settings, dedupeMode, runFollowup, restartIfIdle, options);
 }
 
-// Keep a single process-owned broker and stable work identity for each source.
-// An ambiguous reservation or publication stays unresolved and fails closed.
-const ingressWorkIds = new WeakMap<FollowupRun, string>();
-
 export async function enqueueFollowupWithRecoveryReservation(
   key: string,
   run: FollowupRun,
@@ -240,22 +240,15 @@ export async function enqueueFollowupWithRecoveryReservation(
   restartIfIdle = true,
   options: EnqueueFollowupRunOptions = {},
 ): Promise<boolean> {
-  const broker = await getRecoveryQueueCoordinatorBroker();
-  let workId = ingressWorkIds.get(run);
-  if (!workId) {
-    workId = randomUUID();
-    ingressWorkIds.set(run, workId);
-  }
-  // The queued run can be rebound to a later session. Until exact placement
-  // is proven, a global unmarked reservation vetoes every recovery claim.
-  await broker.reserve({ workId, queue: "followup", scope: { kind: "unmarked" } });
+  await reserveFollowupRunRecoveryWork(run);
+  const firstPublicationAttempt = beginFollowupPublication(run);
   const enqueued = publishFollowupRun(
     key, run, settings, dedupeMode, runFollowup, restartIfIdle, options,
   );
   // Only a definitive local rejection can release the reservation. Accepted,
   // thrown, or ambiguous work awaits authoritative terminal reconciliation.
-  if (!enqueued) {
-    await broker.settle(workId, `rejected:${workId}`);
+  if (!enqueued && firstPublicationAttempt) {
+    await settleFollowupRunRecoveryWork(run, "rejected");
   }
   return enqueued;
 }
@@ -314,6 +307,7 @@ function applyFollowupQueueOverflow(
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         const compactSource = createOverflowSummaryRetrySource(item);
+        carryFollowupRecoveryWork(item, compactSource);
         if (lastElision?.contextKey === contextKey) {
           lastElision.count += 1;
           lastElision.sources.push(compactSource);
