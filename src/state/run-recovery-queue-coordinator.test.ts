@@ -238,6 +238,9 @@ describe("single-owner recovery claim and accepted input", () => {
     reserveRecoveryQueueWork(reopened, f.unmarked("later-unmarked"));
     expect(readRecoveryClaimOutbox(reopened, input.expected.agentId,
       input.expected.sessionId, input.idempotencyKey)?.state).toBe("needs_reconciliation");
+    expect(recordRecoveryClaimHandoff(reopened, f.incarnation, input.expected.agentId,
+      input.expected.sessionId, input.idempotencyKey, first.row.claimId, "accepted-1"))
+      .toMatchObject({ state: "needs_reconciliation", handoffInputId: "accepted-1" });
     expect(claimRecoveryOutbox(reopened, input, { assertClaimCurrent: () => {} }))
       .toEqual({ kind: "held", reason: "invalidated" });
   });

@@ -180,10 +180,14 @@ export async function openRecoveryQueueCoordinatorBroker(
           accepted.requestHash !== `request:${row.claimId}`) {
         throw new Error("Recovery handoff acceptance could not be read back");
       }
-      await write((worker) => worker.execute({ type: "recoveryQueue.handoff",
+      const acknowledged = await write((worker) => worker.execute({ type: "recoveryQueue.handoff",
         input: { incarnation, agentId: params.agentId, sessionId: params.sessionId,
           idempotencyKey: params.idempotencyKey, claimId: row.claimId,
           inputId: receipt.inputId } }));
+      if (acknowledged.state !== "handed_off") {
+        receipt.finish("interrupted");
+        throw new Error("Recovery handoff was invalidated by newer queue work");
+      }
       return { kind: "staged" as const, inputId: receipt.inputId, receipt };
     },
     reserve: (work: Omit<RecoveryQueueReservation, "incarnation">) =>

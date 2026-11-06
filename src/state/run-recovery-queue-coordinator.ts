@@ -503,6 +503,8 @@ export function recordRecoveryClaimHandoff(
       db.prepare(`UPDATE recovery_claim_outbox SET state = 'handed_off', handed_off_at = ?, handoff_input_id = ?
         WHERE claim_id = ? AND state = 'pending'`).run(Date.now(), inputId, claimId); // sqlite-allow-raw -- Exact handoff acknowledgment.
     }
-    return { ...outboxRow(stored), state: stored.state === "pending" ? "handed_off" : stored.state, handoffInputId: inputId };
+    return stored.state === "pending"
+      ? { ...outboxRow(stored), state: "handed_off", handoffInputId: inputId }
+      : outboxRow(stored);
   });
 }
