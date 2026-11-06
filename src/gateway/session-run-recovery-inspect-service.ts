@@ -5,6 +5,8 @@ import type { WorkerSessionPlacementRecord } from "./worker-environments/placeme
 import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
 import { readSessionRecoveryAdmissionSnapshot } from "../sessions/session-lifecycle-admission.js";
 import { fingerprintRunRecoverySourceRoute } from "../config/sessions/run-recovery-source-route.js";
+import { hasQueuedCommandForRecoverySession } from "../process/command-queue.state.js";
+import { hasTrackedProcessForRecoverySession } from "../agents/bash-process-registry.js";
 
 const UNKNOWN = { complete: false, state: "unknown" } as const;
 const ACTIVE = { complete: true, state: "active" } as const;
@@ -36,6 +38,8 @@ export function inspectGatewayRunRecovery(params: {
   }>;
   readRunOwners?: typeof readAgentRunRecoveryOwnerSnapshot;
   readAdmissions?: typeof readSessionRecoveryAdmissionSnapshot;
+  readQueuedCommand?: typeof hasQueuedCommandForRecoverySession;
+  readTrackedProcess?: typeof hasTrackedProcessForRecoverySession;
 }): SessionsRecoveryInspectResult {
   const { agentId, key, entry } = params;
   const observedRunId = entry.lifecycleRunId || entry.lastRunId;
@@ -60,6 +64,10 @@ export function inspectGatewayRunRecovery(params: {
   const admissions = (params.readAdmissions ?? readSessionRecoveryAdmissionSnapshot)({
     scope: params.storePath, sessionKey: key, sessionId: entry.sessionId,
   });
+  const queuedCommandActive = (params.readQueuedCommand ??
+    hasQueuedCommandForRecoverySession)(key);
+  const trackedProcessActive = (params.readTrackedProcess ??
+    hasTrackedProcessForRecoverySession)(agentId, key);
   // These Gateway maps are owner-owned and sampled in this same synchronous
   // call. They prove presence only, never the absence of a different owner.
   const matches = (candidate: { agentId?: string; sessionKey: string; sessionId: string }) =>
@@ -162,11 +170,13 @@ export function inspectGatewayRunRecovery(params: {
         directControllerActive ? ACTIVE : UNKNOWN,
       pendingAdmission: admissions.pending || admissions.active ? ACTIVE : UNKNOWN,
       followupQueue: queuedTurnActive ? ACTIVE : UNKNOWN,
-      laneQueue: UNKNOWN,
+      laneQueue: queuedCommandActive ? ACTIVE : UNKNOWN,
       pendingInput: pendingInputActive ? ACTIVE : UNKNOWN,
       descendant: UNKNOWN,
-      process: UNKNOWN,
-      worker: UNKNOWN,
+      process: trackedProcessActive ? ACTIVE : UNKNOWN,
+      worker: (exactPlacement?.state === "active" || exactPlacement?.state === "draining") &&
+        exactPlacement.turnClaim?.owner === "worker" &&
+        exactPlacement.turnClaim.ownerEpoch === exactPlacement.activeOwnerEpoch ? ACTIVE : UNKNOWN,
       terminal: terminalBound ? { complete: true, state: "clear" } : UNKNOWN,
       sourceRoute: routeAuthorized ? { complete: true, state: "clear" } : UNKNOWN,
       inputLineage: inputBound ? { complete: true, state: "clear" } : UNKNOWN,

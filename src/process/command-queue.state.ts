@@ -168,6 +168,22 @@ export function getQueueState() {
   }));
 }
 
+/** Presence-only recovery read. Queue provenance has no session incarnation,
+ * and unmarked tasks exist, so an empty result cannot prove clear custody. */
+export function hasQueuedCommandForRecoverySession(sessionKey: string): boolean {
+  for (const lane of getQueueState().lanes.values()) {
+    for (const fifo of [lane.queue.foreground, lane.queue.normal, lane.queue.background]) {
+      for (let entry = fifo.head; entry; entry = entry.next) {
+        if (entry.taskIdentity?.sessionKey === sessionKey ||
+            entry.taskIdentity?.requesterSessionKey === sessionKey) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 export function normalizeLane(lane: string): string {
   return lane.trim() || CommandLane.Main;
 }

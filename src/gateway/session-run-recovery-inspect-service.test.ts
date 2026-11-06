@@ -304,6 +304,37 @@ describe("read-only run recovery inspection", () => {
       pendingInputReceipts: receipt }).evidence.pendingInput.state).toBe("unknown");
     expect(inspect({ pendingInputReceipts: undefined }).evidence.pendingInput.state).toBe("unknown");
   });
+  it("vetoes matching lane and tracked process presence, but not unrelated identities", () => {
+    const active = inspect({ readQueuedCommand: (key) => key === "agent:main:main",
+      readTrackedProcess: (agentId, key) => agentId === "main" && key === "agent:main:main" });
+    expect(active.evidence.laneQueue).toEqual({ complete: true, state: "active" });
+    expect(active.evidence.process).toEqual({ complete: true, state: "active" });
+    const unknown = inspect({ readQueuedCommand: () => false,
+      readTrackedProcess: () => false });
+    expect(unknown.evidence.laneQueue).toEqual({ complete: false, state: "unknown" });
+    expect(unknown.evidence.process).toEqual({ complete: false, state: "unknown" });
+    expect(unknown.reviewToken).toBeUndefined();
+  });
+  it("vetoes only an exact active worker turn claim, without trusting stale generations", () => {
+    const placement = { agentId: "main", sessionKey: "agent:main:main",
+      sessionId: "s1", state: "active", generation: 8, executionMode: "worker-turn",
+      activeOwnerEpoch: 5,
+      turnClaim: { owner: "worker", runId: "run-1", generation: 8,
+        ownerEpoch: 5, claimId: "claim-1" } } as WorkerSessionPlacementRecord;
+    expect(inspect({ placement }).evidence.worker).toEqual({ complete: true, state: "active" });
+    expect(inspect({ placement: { ...placement, turnClaim: {
+      ...placement.turnClaim!, runId: "run-2" } } as WorkerSessionPlacementRecord })
+      .evidence.worker).toEqual({ complete: true, state: "active" });
+    for (const changed of [
+      { ...placement, sessionId: "other-session" },
+      { ...placement, turnClaim: { ...placement.turnClaim!, generation: 7 } },
+      { ...placement, turnClaim: { ...placement.turnClaim!, ownerEpoch: 6 } },
+      { ...placement, state: "failed" },
+    ]) {
+      expect(inspect({ placement: changed as WorkerSessionPlacementRecord }).evidence.worker)
+        .toEqual({ complete: false, state: "unknown" });
+    }
+  });
   it("vetoes pending and acquired admissions before run registration", () => {
     for (const snapshot of [{ active: false, pending: true },
       { active: true, pending: false }]) {

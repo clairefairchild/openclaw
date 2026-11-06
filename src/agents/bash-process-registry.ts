@@ -129,6 +129,14 @@ const activeExecSessions = new Map<
 >();
 let finishedSessionOutputChars = 0;
 
+/** Presence-only read, including foreground/finalizing producers that are not
+ * visible through the background-process list. No session incarnation is
+ * recorded here, so absence cannot establish recovery quiescence. */
+export function hasTrackedProcessForRecoverySession(agentId: string, sessionKey: string): boolean {
+  return [...activeExecSessions.values()].some(({ session }) =>
+    session.agentId === agentId && session.sessionKey === sessionKey);
+}
+
 let sweeper: NodeJS.Timeout | null = null;
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
