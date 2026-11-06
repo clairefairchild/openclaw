@@ -148,6 +148,7 @@ describe("accepted input custody", () => {
       runId: "new-user-run", message: message("new-user-run"), assertCurrent: () => {},
     });
     expect(acceptedLater).toBeDefined();
+    acceptedLater?.finish("interrupted");
     closeOpenClawAgentDatabasesForTest();
     expect(prepare()).toEqual({ kind: "held", reason: "queue_not_cut_over" });
   });
