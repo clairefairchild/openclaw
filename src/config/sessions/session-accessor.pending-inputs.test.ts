@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { runWithSessionRecoveryAdmissionInspection } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
@@ -520,6 +521,30 @@ describe("accepted input custody", () => {
     expect(listSessionPendingInputReceipts(scope(), { runIds: ["run-1"] })).toEqual([]);
     await promote(other);
     expect(readSessionPendingInputCustody(scope())).toBe("unknown");
+  });
+
+  it("does not treat a lifecycle-locked empty read as an enqueue fence", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const inspection = runWithSessionRecoveryAdmissionInspection({
+      scope: fixture.storePath(), sessionKey, sessionId,
+      run: async () => {
+        expect(readSessionPendingInputCustody(scope())).toBe("unknown");
+        entered.resolve();
+        await release.promise;
+        return readSessionPendingInputCustody(scope());
+      },
+    });
+    await entered.promise;
+    try {
+      // The durable pending-input writer owns a different lock, even for the
+      // same key and incarnation. An enqueue can commit during inspection.
+      const other = await stage("concurrent-other-run");
+      expect(other.state).toBe("queued");
+    } finally {
+      release.resolve();
+    }
+    expect(await inspection).toBe("active");
   });
 
   it("rolls aggregate append and every source consumption back as one transaction", async () => {
