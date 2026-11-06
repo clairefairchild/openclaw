@@ -49,6 +49,19 @@ describe("durable recovery queue admission", () => {
     expect(prepareRecoveryClaimIntent(f.db, f.claim)).toEqual({ kind: "held", reason: "queue_not_cut_over" });
   });
 
+  it("does not infer followup producer cutover from a complete lifecycle", () => {
+    const f = fixture();
+    expect(reserveRecoveryQueueWork(f.db, {
+      incarnation: f.incarnation, workId: "followup-1", queue: "followup",
+      scope: { kind: "unmarked" },
+    })).toBe("reserved");
+    expect(startRecoveryQueueWork(f.db, f.incarnation, "followup-1")).toBe("started");
+    expect(settleRecoveryQueueWork(f.db, f.incarnation, "followup-1", "terminal-1")).toBe("settled");
+    expect(f.db.prepare("SELECT queue_kind FROM recovery_queue_cutovers").all()).toEqual([]);
+    expect(prepareRecoveryClaimIntent(f.db, f.claim))
+      .toEqual({ kind: "held", reason: "queue_not_cut_over" });
+  });
+
   it("holds exact and unmarked work, including after restart, and settles idempotently", () => {
     const f = fixture();
     f.cutOver();

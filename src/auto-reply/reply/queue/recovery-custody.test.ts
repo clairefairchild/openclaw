@@ -46,6 +46,17 @@ describe("follow-up durable custody", () => {
     expect(broker.settle).not.toHaveBeenCalled();
   });
 
+  it("never republishes after an uncertain terminal acknowledgment", async () => {
+    const source = run("terminal attempt");
+    await reserveFollowupRunRecoveryWork(source);
+    broker.settle.mockRejectedValueOnce(new Error("terminal ack lost"));
+    await expect(settleFollowupRunRecoveryWork(source, "rejected")).rejects.toThrow("terminal ack lost");
+    await expect(reserveFollowupRunRecoveryWork(source)).rejects.toThrow("terminal attempt");
+    await settleFollowupRunRecoveryWork(source, "rejected");
+    expect(broker.settle.mock.calls[0]).toEqual(broker.settle.mock.calls[1]);
+    await expect(settleFollowupRunRecoveryWork(source, "different")).rejects.toThrow("receipt changed");
+  });
+
   it("starts before terminal settlement and carries source identity through summary compaction", async () => {
     const source = run("original");
     const compact = run("summary");

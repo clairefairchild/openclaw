@@ -5,14 +5,14 @@ import type { FollowupRun } from "./types.js";
 
 // The ledger, not this process-local index, is authoritative. Lost indexes after
 // restart leave ledger reservations unresolved until an explicit reconciliation.
-const workIds = new WeakMap<FollowupRun, string>();
-const publicationAttempted = new WeakSet<FollowupRun>();
+type RecoveryWork = { workId: string; publicationAttempted: boolean; terminalReceipt?: string };
+const work = new WeakMap<FollowupRun, RecoveryWork>();
 const aggregateSources = new WeakMap<FollowupRun, readonly FollowupRun[]>();
 
 export function carryFollowupRecoveryWork(source: FollowupRun, replacement: FollowupRun): void {
-  const workId = workIds.get(source);
-  if (workId) {
-    workIds.set(replacement, workId);
+  const sourceWork = work.get(source);
+  if (sourceWork) {
+    work.set(replacement, sourceWork);
   }
 }
 
@@ -28,41 +28,57 @@ export function followupRecoverySources(run: FollowupRun): readonly FollowupRun[
 }
 
 export function beginFollowupPublication(run: FollowupRun): boolean {
-  const firstAttempt = !publicationAttempted.has(run);
-  publicationAttempted.add(run);
+  const sourceWork = work.get(run);
+  if (!sourceWork || sourceWork.terminalReceipt) {
+    throw new Error("Follow-up publication has no open recovery reservation");
+  }
+  const firstAttempt = !sourceWork.publicationAttempted;
+  sourceWork.publicationAttempted = true;
   return firstAttempt;
 }
 
 export async function reserveFollowupRunRecoveryWork(run: FollowupRun): Promise<void> {
-  let workId = workIds.get(run);
-  if (!workId) {
-    workId = randomUUID();
-    workIds.set(run, workId);
+  let sourceWork = work.get(run);
+  if (!sourceWork) {
+    sourceWork = { workId: randomUUID(), publicationAttempted: false };
+    work.set(run, sourceWork);
+  }
+  if (sourceWork.terminalReceipt) {
+    throw new Error("Follow-up recovery work already has a terminal attempt");
   }
   const broker = await getRecoveryQueueCoordinatorBroker();
   // A repeated exact reservation reconciles an uncertain broker acknowledgment.
-  await broker.reserve({ workId, queue: "followup", scope: { kind: "unmarked" } });
+  await broker.reserve({ workId: sourceWork.workId, queue: "followup", scope: { kind: "unmarked" } });
 }
 
 export async function startFollowupRunRecoveryWork(run: FollowupRun): Promise<void> {
-  const workId = workIds.get(run);
-  if (!workId) {
+  const sourceWork = work.get(run);
+  if (!sourceWork) {
     // Pre-cutover or synthetic work has no durable identity. The producer marker
     // remains off, so this cannot be used as absence proof.
     return;
   }
+  if (sourceWork.terminalReceipt) {
+    throw new Error("Follow-up recovery work already has a terminal attempt");
+  }
   const broker = await getRecoveryQueueCoordinatorBroker();
-  await broker.start(workId);
+  await broker.start(sourceWork.workId);
 }
 
 export async function settleFollowupRunRecoveryWork(
   run: FollowupRun,
   terminalReceipt: string,
 ): Promise<void> {
-  const workId = workIds.get(run);
-  if (!workId) {
+  const sourceWork = work.get(run);
+  if (!sourceWork) {
     return;
   }
+  const receipt = `${terminalReceipt}:${sourceWork.workId}`;
+  if (sourceWork.terminalReceipt && sourceWork.terminalReceipt !== receipt) {
+    throw new Error("Follow-up terminal receipt changed");
+  }
+  // Preserve the exact receipt even when the broker write acknowledgment is lost.
+  sourceWork.terminalReceipt = receipt;
   const broker = await getRecoveryQueueCoordinatorBroker();
-  await broker.settle(workId, `${terminalReceipt}:${workId}`);
+  await broker.settle(sourceWork.workId, receipt);
 }
