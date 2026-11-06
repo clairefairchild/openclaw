@@ -45,14 +45,25 @@ type ReservationRow = {
   terminal_receipt_id: string | null;
 };
 type IntentRow = { intent_id: string; generation: string; state: "prepared" | "invalidated" };
-export type RecoveryQueueWriteAuthority = { assertCurrent(): void };
+export type RecoveryQueueWriteAuthority = {
+  assertCurrent?(): void;
+  admitTransaction?(): void;
+  admitCommit?(): void;
+};
 
 function writeTransaction<T>(db: DatabaseSync, authority: RecoveryQueueWriteAuthority | undefined, operation: () => T): T {
-  authority?.assertCurrent();
+  authority?.assertCurrent?.();
   return runSqliteImmediateTransactionSync(db, () => {
-    authority?.assertCurrent();
+    authority?.admitTransaction?.();
+    authority?.assertCurrent?.();
     return operation();
-  }, { withCommit: authority ? (commit) => { authority.assertCurrent(); commit(); } : undefined });
+  }, {
+    withCommit: authority ? (commit) => {
+      authority.admitCommit?.();
+      authority.assertCurrent?.();
+      commit();
+    } : undefined,
+  });
 }
 
 /** A global file, not an agent DB. Never point this at an incognito agent store. */
@@ -64,7 +75,7 @@ export function resolveRunRecoveryQueueCoordinatorPath(env: NodeJS.ProcessEnv = 
 export function openRunRecoveryQueueCoordinator(
   pathname = resolveRunRecoveryQueueCoordinatorPath(), authority?: RecoveryQueueWriteAuthority,
 ): DatabaseSync {
-  authority?.assertCurrent();
+  authority?.assertCurrent?.();
   const existing = existsSync(pathname);
   mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
   const db = openNodeSqliteDatabase(pathname);
@@ -81,7 +92,7 @@ export function openRunRecoveryQueueCoordinator(
     }
     readRecoveryQueueIncarnation(db);
     db.exec("PRAGMA journal_mode = WAL;"); // sqlite-allow-raw -- Only after integrity admission.
-    authority?.assertCurrent();
+    authority?.assertCurrent?.();
     return db;
   } catch (error) {
     db.close();

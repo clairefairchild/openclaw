@@ -398,6 +398,7 @@ function leaseForFile(
 /** One root owns startup or maintenance; only its registered custody can lend schema access. */
 export function acquireGatewayStateOwner(params: {
   databasePath: string;
+  role?: GatewayLockRole;
   payload?: LockPayload;
   projectionPath?: string;
   getProjection?: () => GatewayStateProjection | undefined;
@@ -408,7 +409,7 @@ export function acquireGatewayStateOwner(params: {
   }
   const payload = params.payload
     ? { ...params.payload, ownerId: params.payload.ownerId ?? randomUUID() }
-    : defaultPayload(params.databasePath);
+    : defaultPayload(params.databasePath, params.role);
   const owner: ProcessOwner = {
     kind: "process",
     payload,
