@@ -21,7 +21,7 @@ import { getRecoveryQueueCoordinatorBroker } from './src/state/run-recovery-queu
 const root = process.argv[1];
 process.env.OPENCLAW_STATE_DIR = root;
 const runWorker = (workId, connection) => new Promise((resolve, reject) => {
-  const worker = new Worker(pathToFileURL(process.cwd() + '/src/state/run-recovery-queue-coordinator-thread-bridge.test-worker.ts'), { workerData: { workId, port: connection?.port }, transferList: connection ? [connection.port] : [] });
+  const worker = new Worker(pathToFileURL(process.cwd() + '/src/state/run-recovery-queue-coordinator-thread-bridge.test-worker.ts'), { workerData: { workId, port: connection?.port }, transferList: connection ? [connection.port] : [], execArgv: ['--import', './scripts/tsx.mjs'] });
   worker.once('message', resolve);
   worker.once('error', reject);
 });
