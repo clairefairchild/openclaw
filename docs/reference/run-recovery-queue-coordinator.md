@@ -1,0 +1,21 @@
+# Gateway Run recovery queue coordinator, Stage 1
+
+This source change adds a durable queue-admission coordinator, not recovery activation. The Gateway and both in-memory queues remain unchanged in production. Do not interpret their empty snapshots as absence proof. Existing agent-local `prepareSessionRunRecoveryClaimInWorker` is held with `queue_not_cut_over`, so it cannot prepare a claim during this incomplete migration.
+
+## Identity and lock owner
+
+The coordinator owns one SQLite database at `<state-dir>/run-recovery-queue-coordinator.sqlite`, separate from every per-agent database. A per-agent owner cannot cover a lane task with no session/agent marker, or work for another agent. Its persisted incarnation UUID identifies the physical coordinator epoch; every producer operation must compare it before a write. WAL and `BEGIN IMMEDIATE` serialize reservations, state transitions, and claim intent across processes. No in-memory queue registry or agent-local transaction is used as a queue absence proof.
+
+A producer first reserves a stable work ID, exact `(agentId, sessionId)` or conservative global `unmarked` scope, *before* publishing to a followup queue or starting a command-lane task. A later dequeue transitions `queued` to `in_flight`. Only a terminal custody receipt settles it. A crash leaves unresolved reservations in place. An unmarked reservation vetoes claims for every agent. Duplicated reserve/start/settle operations are idempotent only for the same identity or receipt. A collision or wrong incarnation fails closed. A new reservation after a prepared intent atomically invalidates that intent; accepted user work is not rejected or purged.
+
+Claim intent compares both producer cutover markers and all unresolved relevant reservations in the same `BEGIN IMMEDIATE` transaction that inserts the intent. Neither producer marker has a production caller in Stage 1. An absent marker returns `queue_not_cut_over`, including when the table is empty. The migration marker API must be called only after all publish/start paths for that producer have been fenced and pre-existing queue work reconciled. This API has no automatic timeout or garbage collection of unresolved work.
+
+## Remaining bridge before recovery is possible
+
+1. Move all followup enqueue, overflow, abort, drain and lifecycle terminal paths onto the coordinator. Reserve before any in-memory publication, preserve accepted input receipts, and settle only with authoritative terminal custody. Reconcile work already in the queue at cutover.
+2. Move all command-lane enqueue/start, abort, timeout, group drain and terminal paths onto the coordinator, including tasks without `taskIdentity`. Do not infer agent attribution for unmarked tasks. Reconcile pre-cutover work.
+3. Run coordinator writes through the SQLite worker broker, not the Gateway main thread. Bind worker ownership/connection lifecycle and integrity admission to the global state database owner.
+4. Atomically bridge the coordinator's prepared intent to the existing per-agent claim and accepted-input outbox. The current agent-local claim transaction cannot compare a separate coordinator DB. Use an attached-DB transaction with a reviewed lock order, or move the claim/outbox into a single durable owner, then revalidate session and source generations in that transaction. Until this is implemented, the legacy claim stays unreachable.
+5. Add authoritative reconciliation for ambiguous terminal receipts and accepted input/delivery. Never clear a reservation merely because its producer process died. Review source-route and semantic eligibility separately before any recovery send.
+
+No live Gateway code, install, restart, cron, Run, or source-delivery path is changed by Stage 1. Rollback is to leave the new coordinator unused and retain its SQLite rows, claims, and receipts for later reconciliation. Never delete the ledger to force a clear result.

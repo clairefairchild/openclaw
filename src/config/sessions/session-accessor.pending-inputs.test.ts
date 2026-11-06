@@ -140,25 +140,16 @@ describe("accepted input custody", () => {
     const prepare = (key = "continue-once", selected = expected) =>
       prepareSessionRunRecoveryClaimInWorker(database(),
         toDatabaseOptions(resolveSqliteScope(scope())), selected, key, () => {});
-    expect(prepare()).toEqual({ kind: "held", reason: "unconsumed_input" });
+    expect(prepare()).toEqual({ kind: "held", reason: "queue_not_cut_over" });
     await promote(accepted);
     accepted.finish("interrupted");
-    const claim = prepare();
-    expect(claim).toMatchObject({ kind: "prepared", state: "prepared", repeated: false });
-    expect(prepare()).toEqual({ ...claim, repeated: true });
-    expect(prepare("different-key")).toEqual({ kind: "held", reason: "existing_claim" });
-    expect(prepare("continue-once", { ...expected, databaseIdentity: "other-store" }))
-      .toEqual({ kind: "held", reason: "ambiguous_store" });
-    expect(prepare("continue-once", { ...expected, storeRevision: "other-revision" }))
-      .toEqual({ kind: "held", reason: "changed_generation" });
-    const rejected = await stageSessionPendingInput(scope(), {
+    expect(prepare()).toEqual({ kind: "held", reason: "queue_not_cut_over" });
+    const acceptedLater = await stageSessionPendingInput(scope(), {
       runId: "new-user-run", message: message("new-user-run"), assertCurrent: () => {},
     });
-    expect(rejected).toBeUndefined();
+    expect(acceptedLater).toBeDefined();
     closeOpenClawAgentDatabasesForTest();
-    expect(prepare()).toEqual({ ...claim, repeated: true });
-    await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 4 });
-    expect(prepare()).toEqual({ kind: "held", reason: "changed_generation" });
+    expect(prepare()).toEqual({ kind: "held", reason: "queue_not_cut_over" });
   });
 
   it("durably advances owner input generation and invalidates concurrent same-run input", async () => {
