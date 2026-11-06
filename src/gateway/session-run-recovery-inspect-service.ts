@@ -1,6 +1,7 @@
 import type { SessionsRecoveryInspectResult } from "../../packages/gateway-protocol/src/schema/sessions-recovery-inspect.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
 import { readSessionRecoveryAdmissionSnapshot } from "../sessions/session-lifecycle-admission.js";
 
@@ -16,7 +17,8 @@ export function inspectGatewayRunRecovery(params: {
   agentId: string;
   key: string;
   storePath: string;
-  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId">>;
+  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery">>;
+  placement?: WorkerSessionPlacementRecord;
   chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
   readRunOwners?: typeof readAgentRunRecoveryOwnerSnapshot;
@@ -24,6 +26,21 @@ export function inspectGatewayRunRecovery(params: {
 }): SessionsRecoveryInspectResult {
   const { agentId, key, entry } = params;
   const observedRunId = entry.lifecycleRunId || entry.lastRunId;
+  // Restart recovery persists its admission token only after binding it to
+  // this session's fenced run. Ordinary audit contexts lack a session binding.
+  const recoveryToken = entry.mainRestartRecovery?.executionIdentity;
+  const exactExecution = observedRunId && recoveryToken?.runId === observedRunId &&
+    entry.restartRecoveryRuns?.some((run) => run.runId === observedRunId) &&
+    recoveryToken.executionId && recoveryToken.contextId
+    ? recoveryToken.executionId : undefined;
+  // A placement row belongs to its exact agent/key/session generation. An
+  // inconsistent turn claim cannot establish the current generation.
+  const placement = params.placement;
+  const exactPlacement = placement?.sessionId === entry.sessionId &&
+    placement.agentId === agentId && placement.sessionKey === key &&
+    Number.isSafeInteger(placement.generation) && placement.generation >= 0 &&
+    (!placement.turnClaim || placement.turnClaim.generation === placement.generation)
+    ? placement : undefined;
   const owners = (params.readRunOwners ?? readAgentRunRecoveryOwnerSnapshot)({
     agentId, sessionKey: key, sessionId: entry.sessionId,
   });
@@ -51,15 +68,17 @@ export function inspectGatewayRunRecovery(params: {
     sessionId: entry.sessionId,
     ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
     ...(observedRunId ? { runId: observedRunId } : {}),
+    ...(exactExecution ? { executionId: exactExecution } : {}),
+    ...(exactPlacement ? { placementGeneration: exactPlacement.generation } : {}),
     ...(exactOwner ? { ownerEpoch: exactOwner.ownerEpoch,
       ownerLifecycleGeneration: owners.lifecycleGeneration } : {}),
     ...(entry.status ? { observedSessionStatus: entry.status } : {}),
     metadataCompleteness: {
       identity: true,
-      execution: false,
+      execution: Boolean(exactExecution),
       store: false,
       owner: Boolean(exactOwner),
-      placement: false,
+      placement: Boolean(exactPlacement),
       route: false,
     },
     evidence: {

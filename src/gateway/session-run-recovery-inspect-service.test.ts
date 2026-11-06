@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
+import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { inspectGatewayRunRecovery } from "./session-run-recovery-inspect-service.js";
 
 const entry = {
@@ -30,6 +31,36 @@ describe("read-only run recovery inspection", () => {
       expect(result.executionId).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain("do-not-leak");
     }
+  });
+  it("binds a fenced restart-recovery execution to the exact observed session run", () => {
+    const bound = { ...entry, restartRecoveryRuns: [{ runId: "run-1",
+      lifecycleGeneration: "gateway-1" }], mainRestartRecovery: {
+      cycleId: "cycle-1", revision: 1, chargedAttempts: 1,
+      executionIdentity: { tokenVersion: 1, contextId: "context-1",
+        executionId: "execution-1", runId: "run-1", createdAt: 1 },
+    } } as InternalSessionEntry;
+    expect(inspect({ entry: bound })).toMatchObject({ executionId: "execution-1",
+      metadataCompleteness: { execution: true } });
+    expect(inspect({ entry: { ...bound, lifecycleRunId: "run-2" } })).toMatchObject({
+      metadataCompleteness: { execution: false },
+    });
+    expect(inspect({ entry: { ...bound, restartRecoveryRuns: [] } }).executionId).toBeUndefined();
+  });
+  it("reports only a matching owner-maintained placement generation", () => {
+    const placement = { agentId: "main", sessionKey: "agent:main:main",
+      sessionId: "s1", generation: 8, turnClaim: null } as WorkerSessionPlacementRecord;
+    expect(inspect({ placement })).toMatchObject({ placementGeneration: 8,
+      metadataCompleteness: { placement: true } });
+    for (const mismatch of [{ ...placement, agentId: "other" },
+      { ...placement, sessionKey: "agent:other:main" },
+      { ...placement, sessionId: "other-session" },
+      { ...placement, turnClaim: { generation: 7 } }]) {
+      const result = inspect({ placement: mismatch as WorkerSessionPlacementRecord });
+      expect(result.placementGeneration).toBeUndefined();
+      expect(result.metadataCompleteness.placement).toBe(false);
+    }
+    // A new owner generation replaces the old value; no stale generation is cached.
+    expect(inspect({ placement: { ...placement, generation: 9 } }).placementGeneration).toBe(9);
   });
   it("reports only the exact observed run owner epoch", () => {
     const result = inspect({ readRunOwners: () => ({ registryVersion: 2,
