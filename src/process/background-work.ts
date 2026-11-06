@@ -1,5 +1,6 @@
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody as enqueueCommandInLane } from "./command-queue.recovery-custody.js";
 import { getLaneGroup } from "./command-queue.capacity-groups.js";
-import { enqueueCommandInLane, publishLaneConfiguration } from "./command-queue.js";
+import { publishLaneConfiguration } from "./command-queue.js";
 import { getQueueState } from "./command-queue.state.js";
 import type { CommandLaneSnapshot, CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { getGatewayRestartDrainSignal } from "./gateway-work-admission.js";

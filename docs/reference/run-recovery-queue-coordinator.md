@@ -49,3 +49,26 @@ This does not set the followup cutover marker. Existing in-memory queue contents
 `enqueueCommandInLaneWithRecoveryCustody` is an opt-in bridge over the existing lane queue. A caller supplies a stable work ID and conservative or exact scope. The shared broker reserves before invoking the synchronous publisher, records start before task effects, and settles only a current-generation successful task or a definitive pre-start rejection. A failed task, timeout, reset generation, uncertain broker acknowledgment, and stale completion remain unresolved for reconciliation. Followup ingress and this bridge share one process-owned broker and physical coordinator owner.
 
 No production command-lane caller is switched to the bridge by this stage. The broad command lane has nested, unmarked, timeout, abort, clear, reset, and group-drain paths whose stable work identities and terminal receipts need an owner-by-owner cutover. Existing lane contents are not reconciled. Neither producer cutover marker is written, and recovery remains held with `queue_not_cut_over` (UNKNOWN). Rollback leaves any ledger rows intact for exact-ID reconciliation and reverts only source before deployment.
+
+## Stage 7 command-lane ingress migration (source only, incomplete)
+
+Production command-lane callers now use one guarded ingress for session placement,
+embedded-run and compaction nesting, context-engine maintenance, cron, system-agent
+RPC, and background work. Each submitted task receives a distinct durable work ID.
+The scope remains conservatively `unmarked` even when a lane name resembles a
+session: a lane or diagnostic task identity does not prove an exact agent/session
+owner. The shared broker reserves before the synchronous queue publication and
+starts before the task callback. A definitive pre-start abort, clear, or draining
+rejection is settled; successful current-generation task completion is settled.
+Task failure, timeout, reset, lost broker acknowledgment, or stale completion
+remains unresolved. Group arbitration uses the same guarded entry, so a group
+drain cannot bypass the start fence.
+
+This is not a cutover marker or live migration. The direct queue remains for
+internal tests, and any pre-existing in-memory work at the eventual deploy
+boundary has no durable work ID. Its custody cannot be inferred from an empty
+snapshot after restart. Before setting the command-lane marker, reconcile those
+legacy tasks from authoritative owner receipts, audit every production enqueue
+entry point again, and prove terminal receipts for each owner (especially tasks
+that schedule downstream work). Retain all unresolved rows for exact-ID review.
+The global recovery claim remains held with `queue_not_cut_over`.

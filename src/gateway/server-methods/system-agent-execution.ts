@@ -1,9 +1,10 @@
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody as enqueueCommandInLane } from "../../process/command-queue.recovery-custody.js";
 import {
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
 } from "../../config/runtime-snapshot.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
+import { setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {

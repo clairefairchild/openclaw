@@ -1,0 +1,36 @@
+name: Recovery command source validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Assert exact source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+          echo "Validated source SHA: ${GITHUB_SHA}"
+      - name: Setup Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: restore
+      - name: Core typecheck
+        run: pnpm tsgo:core
+      - name: Focused command custody tests
+        run: pnpm test src/process/command-queue.recovery-custody.test.ts src/process/command-queue.test.ts

@@ -1,3 +1,4 @@
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody as enqueueCommandInLane } from "../../process/command-queue.recovery-custody.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 /**
  * Schedules and runs deferred context-engine turn maintenance.
@@ -10,7 +11,6 @@ import {
 import type { ContextEngine, ContextEngineMaintenanceResult } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  enqueueCommandInLane,
   GatewayDrainingError,
   isGatewayDraining,
 } from "../../process/command-queue.js";

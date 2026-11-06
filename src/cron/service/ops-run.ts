@@ -1,6 +1,6 @@
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody as enqueueCommandInLane } from "../../process/command-queue.recovery-custody.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";

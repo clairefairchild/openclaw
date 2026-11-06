@@ -1,3 +1,4 @@
+import { enqueueCommandInLaneWithGeneratedRecoveryCustody as enqueueCommandInLane } from "../../../process/command-queue.recovery-custody.js";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -13,7 +14,6 @@ import {
 } from "../../../infra/agent-run-registry.js";
 import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import {
-  enqueueCommandInLane,
   getCommandLaneSnapshot,
   isCommandLaneTaskTimeoutError,
 } from "../../../process/command-queue.js";

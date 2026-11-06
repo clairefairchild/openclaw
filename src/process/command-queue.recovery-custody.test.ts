@@ -1,12 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot, resetCommandLane } from "./command-queue.js";
-import { enqueueCommandInLaneWithRecoveryCustody } from "./command-queue.recovery-custody.js";
+import {
+  enqueueCommandInLaneWithGeneratedRecoveryCustody,
+  enqueueCommandInLaneWithRecoveryCustody,
+} from "./command-queue.recovery-custody.js";
 
 const broker = vi.hoisted(() => ({
-  reserve: vi.fn(async () => "reserved"),
-  start: vi.fn(async () => "started"),
-  settle: vi.fn(async () => "settled"),
+  reserve: vi.fn(async (_work: { workId: string; scope: { kind: string } }) => "reserved"),
+  start: vi.fn(async (_workId: string) => "started"),
+  settle: vi.fn(async (_workId: string, _receipt: string) => "settled"),
 }));
 vi.mock("../state/run-recovery-queue-coordinator-broker.js", () => ({
   getRecoveryQueueCoordinatorBroker: async () => broker,
@@ -110,4 +113,21 @@ it("never publishes after an ambiguous reserve result", async () => {
   expect(getCommandLaneSnapshot(lane).queuedCount).toBe(0);
   expect(broker.start).not.toHaveBeenCalled();
   expect(broker.settle).not.toHaveBeenCalled();
+});
+
+it("gives separate unmarked custody to otherwise unidentified production tasks", async () => {
+  const lane = `generated-custody-${++sequence}`;
+  const first = await enqueueCommandInLaneWithGeneratedRecoveryCustody(lane, async () => "first");
+  const second = await enqueueCommandInLaneWithGeneratedRecoveryCustody(lane, async () => "second");
+  expect([first, second]).toEqual(["first", "second"]);
+  const workIds = broker.reserve.mock.calls.map(([work]) => work.workId as string);
+  expect(workIds).toHaveLength(2);
+  expect(workIds[0]).not.toBe(workIds[1]);
+  expect(workIds.every((id) => id.startsWith("command-lane:"))).toBe(true);
+  expect(broker.reserve.mock.calls.map(([work]) => work.scope)).toEqual([
+    { kind: "unmarked" },
+    { kind: "unmarked" },
+  ]);
+  expect(broker.start.mock.calls.map(([workId]) => workId)).toEqual(workIds);
+  expect(broker.settle.mock.calls.map(([workId]) => workId)).toEqual(workIds);
 });

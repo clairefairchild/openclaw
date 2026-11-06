@@ -1,4 +1,5 @@
-/** Opt-in command-lane custody bridge. This does not declare producer cutover. */
+/** Guarded command-lane custody bridge. This does not declare producer cutover. */
+import { randomUUID } from "node:crypto";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "./command-queue.js";
 import type { CommandLaneTaskMarker } from "./command-queue.state.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
@@ -42,4 +43,22 @@ export async function enqueueCommandInLaneWithRecoveryCustody<T>(
     }
     throw error;
   }
+}
+
+/** Production ingress for every command lane, including nested and unmarked work.
+ * A UUID is minted once per submitted task and retained in the ledger's work ID.
+ * A missing exact agent/session pair is always global, never inferred from a lane name.
+ */
+export function enqueueCommandInLaneWithGeneratedRecoveryCustody<T>(
+  lane: string,
+  task: (marker: CommandLaneTaskMarker) => Promise<T>,
+  opts?: CommandQueueEnqueueOptions,
+): Promise<T> {
+  const workId = `command-lane:${randomUUID()}`;
+  return enqueueCommandInLaneWithRecoveryCustody(
+    lane,
+    task,
+    { workId, scope: { kind: "unmarked" } },
+    opts,
+  );
 }
