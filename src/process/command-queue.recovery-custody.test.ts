@@ -11,8 +11,8 @@ const broker = vi.hoisted(() => ({
   start: vi.fn(async (_workId: string) => "started"),
   settle: vi.fn(async (_workId: string, _receipt: string) => "settled"),
 }));
-vi.mock("../state/run-recovery-queue-coordinator-broker.js", () => ({
-  getRecoveryQueueCoordinatorBroker: async () => broker,
+vi.mock("../state/run-recovery-queue-coordinator-thread-bridge.js", () => ({
+  recoveryQueueCoordinatorForCaller: broker,
 }));
 
 let sequence = 0;

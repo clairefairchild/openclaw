@@ -75,3 +75,9 @@ from an empty snapshot after restart. Its authoritative owner receipts, as
 well as abort, clear, group drain, timeout, and downstream terminal receipts,
 need reconciliation before the marker can be set. Retain all unresolved ledger
 rows for exact-ID review. Recovery remains held with `queue_not_cut_over`.
+
+## Stage 7 application-worker host transport (source only, incomplete)
+
+A process-local thread bridge now routes opted-in command custody operations from application Workers to the Gateway main-thread host. The host owns the existing coordinator broker, physical state-owner sidecar, integrity admission, incarnation check, and native SQLite worker. Worker requests carry only reserve/start/settle facts, never a database path, authority grant, or cutover marker. The Gateway installs the listener only while its main-thread state owner is active, joins accepted operations on close, and refuses a missing or invalid host. An uncertain reply leaves the stable work ID unresolved for reconciliation. Direct host calls use the same broker. Source tests exercise the real worker-to-host path, host path, absence refusal, and repeated stable ID.
+
+This transport does not move the embedded run controller or generic background enqueue back onto custody yet. Their unit and runtime paths require an explicit producer-by-producer migration with terminal receipt and preexisting queue reconciliation. The command cutover marker remains off; no recovery claim or send becomes eligible. The followup marker, cross-database claim bridge, and other Stage 1-6 gaps also remain outstanding.

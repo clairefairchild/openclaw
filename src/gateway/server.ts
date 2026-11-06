@@ -4,6 +4,7 @@
  * Keeping `server-start` behind dynamic import lets light-weight callers import
  * server types and helpers without paying the full startup dependency graph.
  */
+import { isMainThread } from "node:worker_threads";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayServerOptions } from "./server-public.js";
@@ -29,18 +30,25 @@ export async function startGatewayServer(
     ? null
     : await acquireGatewayLock({ port, listenerMode: "foreground" });
   const gatewayStateOwner = opts.gatewayStateOwner ?? ownedLock ?? undefined;
+  let stopRecoveryHost: (() => Promise<void>) | undefined;
   try {
     gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
+    if (gatewayStateOwner && isMainThread) {
+      const { installRecoveryQueueCoordinatorThreadHost } = await import("../state/run-recovery-queue-coordinator-thread-bridge.js");
+      stopRecoveryHost = installRecoveryQueueCoordinatorThreadHost();
+    }
     const server = await startGatewayServerWithRuntime(port, { ...opts, gatewayStateOwner });
     return {
       ...server,
       close: async (closeOptions) => {
         await server.close(closeOptions);
+        await stopRecoveryHost?.();
         // A failed join retains ownership: another starter must not enter over live work.
         await ownedLock?.release();
       },
     };
   } catch (error) {
+    await stopRecoveryHost?.();
     if (!(error instanceof GatewayStartupCleanupError)) {
       await ownedLock?.release();
     }

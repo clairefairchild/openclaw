@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "./command-queue.js";
 import type { CommandLaneTaskMarker } from "./command-queue.state.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
-import { getRecoveryQueueCoordinatorBroker } from "../state/run-recovery-queue-coordinator-broker.js";
+import { recoveryQueueCoordinatorForCaller } from "../state/run-recovery-queue-coordinator-thread-bridge.js";
 import type { RecoveryWorkScope } from "../state/run-recovery-queue-coordinator.js";
 
 /**
@@ -18,7 +18,7 @@ export async function enqueueCommandInLaneWithRecoveryCustody<T>(
   custody: { workId: string; scope: RecoveryWorkScope },
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
-  const broker = await getRecoveryQueueCoordinatorBroker();
+  const broker = recoveryQueueCoordinatorForCaller;
   await broker.reserve({ workId: custody.workId, queue: "command-lane", scope: custody.scope });
   let startAttempted = false;
   try {

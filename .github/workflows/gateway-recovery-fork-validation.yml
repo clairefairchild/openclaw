@@ -35,6 +35,7 @@ jobs:
       - name: Focused command custody tests
         run: >-
           pnpm test
+          src/state/run-recovery-queue-coordinator-thread-bridge.test.ts
           src/process/command-queue.recovery-custody.test.ts
           src/process/command-queue.test.ts
           src/gateway/server-methods/system-agent-concurrency.test.ts
