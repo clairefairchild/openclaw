@@ -80,14 +80,13 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       // Keep the metadata read fail-closed without exposing state-store errors.
     }
     const observedRunId = entry.lifecycleRunId || entry.lastRunId;
-    {
-      try {
-        pendingInputSnapshot = await readSessionPendingInputReceiptsInWorker({
-          agentId: target.agentId,
-          sessionKey: target.canonicalKey,
-          sessionId: entry.sessionId,
-          storePath: target.storePath,
-        }, { runIds: observedRunId ? [observedRunId] : [] });
+    try {
+      pendingInputSnapshot = await readSessionPendingInputReceiptsInWorker({
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        sessionId: entry.sessionId,
+        storePath: target.storePath,
+      }, { runIds: observedRunId ? [observedRunId] : [] });
     } catch {
       // An unavailable or ambiguous durable read remains unknown.
     }
