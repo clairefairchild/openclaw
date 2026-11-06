@@ -494,7 +494,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         isFiniteTimestamp(patch.endedAt)
       ) {
         const token = entry.mainRestartRecovery?.executionIdentity;
-        const executionId = token?.runId === eventRunId &&
+        const restartExecutionId = token?.runId === eventRunId &&
           entry.restartRecoveryRuns?.some((run) => run.runId === eventRunId) &&
           token.executionId && token.contextId ? token.executionId : undefined;
         const owners = readAgentRunRecoveryOwnerSnapshot({
@@ -507,6 +507,13 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           owners.activeRunIds[0] === eventRunId && owners.exactOwners.length === 1 &&
           owners.exactOwners[0]?.runId === eventRunId
           ? owners.exactOwners[0].ownerEpoch : undefined;
+        // The event claim is an execution identity only while the exact live
+        // owner still holds it. A run ID or an unverified event field is not.
+        const claimId = normalizeLifecycleRunId(params.event.contextClaimId);
+        const ownerClaimId = ownerEpoch !== undefined && claimId &&
+          owners.exactOwners[0]?.claimIds.length === 1 &&
+          owners.exactOwners[0].claimIds[0] === claimId ? claimId : undefined;
+        const executionId = restartExecutionId ?? ownerClaimId;
         patch.runRecoveryTerminalReceipt = {
           sessionId: entry.sessionId,
           runId: eventRunId,
@@ -514,7 +521,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
           lifecycleGeneration: params.event.lifecycleGeneration,
           endedAt: patch.endedAt,
           status: patch.status,
-          ...(executionId ? { executionId } : {}),
+          ...(executionId ? { executionId,
+            executionSource: restartExecutionId ? "restart-recovery" as const : "owner-claim" as const } : {}),
           ...(ownerEpoch !== undefined ? { ownerEpoch } : {}),
         };
       }

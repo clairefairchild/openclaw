@@ -83,6 +83,35 @@ describe("read-only run recovery inspection", () => {
     expect(inspect({ entry: bound }).evidence.sourceRoute.state).toBe("unknown");
     expect(inspect({ entry: bound }).evidence.inputLineage.state).toBe("unknown");
   });
+  it("accepts an exact owner-claim receipt, but never promotes a changed session or run", () => {
+    const bound = { ...entry, lifecycleRunId: undefined, lastRunId: "run-1",
+      status: "done" as const, runRecoveryTerminalReceipt: {
+        sessionId: "s1", runId: "run-1", lifecycleRevision: "revision-1",
+        lifecycleGeneration: "gateway-1", executionId: "claim-1",
+        executionSource: "owner-claim" as const, ownerEpoch: 7,
+        status: "done" as const, endedAt: 2_000,
+      } } as InternalSessionEntry;
+    expect(inspect({ entry: bound })).toMatchObject({ executionId: "claim-1",
+      metadataCompleteness: { execution: true },
+      evidence: { terminal: { complete: true, state: "clear" },
+        inputLineage: { complete: false, state: "unknown" },
+        sourceRoute: { complete: false, state: "unknown" } } });
+    for (const changed of [
+      { ...bound, sessionId: "s2" },
+      { ...bound, lastRunId: "run-2" },
+      { ...bound, lifecycleRevision: "revision-2" },
+      { ...bound, runRecoveryTerminalReceipt: { ...bound.runRecoveryTerminalReceipt!,
+        executionSource: undefined } },
+      { ...bound, runRecoveryTerminalReceipt: { ...bound.runRecoveryTerminalReceipt!,
+        ownerEpoch: undefined } },
+    ]) {
+      const result = inspect({ entry: changed });
+      expect(result.executionId).toBeUndefined();
+      expect(result.evidence.terminal).toEqual({ complete: false, state: "unknown" });
+    }
+    expect(inspect({ entry: bound, readRunOwners: () => ({ ...noOwners(),
+      activeRunIds: ["run-1"] }) }).evidence.terminal.state).toBe("unknown");
+  });
   it("reports only a matching owner-maintained placement generation", () => {
     const placement = { agentId: "main", sessionKey: "agent:main:main",
       sessionId: "s1", generation: 8, turnClaim: null } as WorkerSessionPlacementRecord;

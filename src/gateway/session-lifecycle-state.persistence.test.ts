@@ -185,6 +185,52 @@ it("durably records only an exact settled terminal owner and clears it on a new 
   }
 });
 
+it("binds an ordinary terminal execution only to its live exact owner claim", async () => {
+  const tempDirs = createTempDirTracker();
+  const target = {
+    storePath: path.join(tempDirs.make("openclaw-owner-claim-receipt-"), "sessions.json"),
+    sessionKey: "agent:main:owner-claim-receipt",
+  };
+  const sessionId = "owner-claim-session";
+  const runId = "owner-claim-run";
+  const generation = getAgentEventLifecycleGeneration();
+  routing.loadSessionEntry.mockImplementation(() => ({ ...target,
+    canonicalKey: target.sessionKey, agentId: "main", entry: loadSessionEntry(target) }));
+  let claimId: string | undefined;
+  try {
+    await replaceSessionEntry(target, { sessionId, lifecycleRevision: "revision-1",
+      lifecycleRunId: runId, status: "running", startedAt: 1_000, updatedAt: 1_000 });
+    claimId = claimAgentRunContext(runId, { agentId: "main", sessionId,
+      sessionKey: target.sessionKey, lifecycleGeneration: generation },
+    { exclusive: true, ownsContext: true, trackOwner: true });
+    expect(claimId).toBeTruthy();
+    await lifecycleState.persistGatewaySessionLifecycleEvent({ sessionKey: target.sessionKey,
+      event: { runId, sessionId, contextClaimId: "wrong-claim",
+        lifecycleGeneration: generation, ts: 2_000,
+        data: { phase: "end", endedAt: 2_000 } } });
+    expect(loadSessionEntry(target)?.runRecoveryTerminalReceipt).toMatchObject({
+      ownerEpoch: expect.any(Number), status: "done",
+    });
+    expect(loadSessionEntry(target)?.runRecoveryTerminalReceipt?.executionId).toBeUndefined();
+    await replaceSessionEntry(target, { sessionId, lifecycleRevision: "revision-2",
+      lifecycleRunId: runId, status: "running", startedAt: 3_000, updatedAt: 3_000 });
+    await lifecycleState.persistGatewaySessionLifecycleEvent({ sessionKey: target.sessionKey,
+      event: { runId, sessionId, contextClaimId: claimId,
+        lifecycleGeneration: generation, ts: 4_000,
+        data: { phase: "end", endedAt: 4_000 } } });
+    closeOpenClawAgentDatabasesForTest();
+    expect(loadSessionEntry({ ...target, readConsistency: "latest" })?.runRecoveryTerminalReceipt)
+      .toMatchObject({ sessionId, runId, lifecycleRevision: "revision-2",
+        executionId: claimId, executionSource: "owner-claim",
+        ownerEpoch: expect.any(Number) });
+  } finally {
+    if (claimId) { releaseAgentRunContext(runId, claimId); }
+    routing.loadSessionEntry.mockReset();
+    closeOpenClawAgentDatabasesForTest();
+    tempDirs.cleanup();
+  }
+});
+
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
   const tempDirs = createTempDirTracker();
   const target = {

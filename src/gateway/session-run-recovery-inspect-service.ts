@@ -34,7 +34,7 @@ export function inspectGatewayRunRecovery(params: {
   // Restart recovery persists its admission token only after binding it to
   // this session's fenced run. Ordinary audit contexts lack a session binding.
   const recoveryToken = entry.mainRestartRecovery?.executionIdentity;
-  const exactExecution = observedRunId && recoveryToken?.runId === observedRunId &&
+  const restartExecution = observedRunId && recoveryToken?.runId === observedRunId &&
     entry.restartRecoveryRuns?.some((run) => run.runId === observedRunId) &&
     recoveryToken.executionId && recoveryToken.contextId
     ? recoveryToken.executionId : undefined;
@@ -77,12 +77,18 @@ export function inspectGatewayRunRecovery(params: {
     directControllerRunIds.every((runId) => runId === observedRunId)
     ? owners.exactOwners[0] : undefined;
   const receipt = entry.runRecoveryTerminalReceipt;
+  const ownerClaimExecution = receipt?.executionSource === "owner-claim" &&
+    receipt.ownerEpoch !== undefined && typeof receipt.executionId === "string" &&
+    receipt.executionId.length > 0 ? receipt.executionId : undefined;
+  const exactExecution = restartExecution ?? ownerClaimExecution;
   const terminalBound = receipt?.sessionId === entry.sessionId &&
     receipt.runId === observedRunId && receipt.executionId === exactExecution &&
-    Boolean(exactExecution) && receipt.ownerEpoch !== undefined &&
+    (receipt.executionSource === "owner-claim" ? Boolean(ownerClaimExecution) :
+      Boolean(restartExecution)) && receipt.ownerEpoch !== undefined &&
     receipt.lifecycleRevision === entry.lifecycleRevision &&
-    entry.restartRecoveryRuns?.some((run) => run.runId === receipt.runId &&
-      run.lifecycleGeneration === receipt.lifecycleGeneration) &&
+    (receipt.executionSource === "owner-claim" ||
+      entry.restartRecoveryRuns?.some((run) => run.runId === receipt.runId &&
+        run.lifecycleGeneration === receipt.lifecycleGeneration)) &&
     owners.consistent &&
     typeof receipt.lifecycleGeneration === "string" &&
     receipt.lifecycleGeneration.length > 0 &&
@@ -95,7 +101,8 @@ export function inspectGatewayRunRecovery(params: {
     sessionId: entry.sessionId,
     ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
     ...(observedRunId ? { runId: observedRunId } : {}),
-    ...(exactExecution ? { executionId: exactExecution } : {}),
+    ...(terminalBound && exactExecution ? { executionId: exactExecution } :
+      restartExecution ? { executionId: restartExecution } : {}),
     ...(terminalBound && receipt?.ownerEpoch !== undefined
       ? { ownerEpoch: receipt.ownerEpoch } : {}),
     ...(exactPlacement ? { placementGeneration: exactPlacement.generation } : {}),
@@ -104,7 +111,7 @@ export function inspectGatewayRunRecovery(params: {
     ...(entry.status ? { observedSessionStatus: entry.status } : {}),
     metadataCompleteness: {
       identity: true,
-      execution: Boolean(exactExecution),
+      execution: Boolean(restartExecution || (terminalBound && ownerClaimExecution)),
       store: false,
       owner: Boolean(exactOwner || terminalBound),
       placement: Boolean(exactPlacement),

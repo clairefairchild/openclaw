@@ -619,6 +619,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
     endedAt: number;
     status: "done" | "failed" | "timeout" | "killed";
     executionId?: string;
+    /** Proven from the active owner claim or the restart-recovery admission token. */
+    executionSource?: "owner-claim" | "restart-recovery";
     ownerEpoch?: number;
   };
   /** Personal discovery state, never participation, attribution, or sharing authority. */

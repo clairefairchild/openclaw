@@ -548,13 +548,13 @@ export function readAgentRunRecoveryOwnerSnapshot(params: {
   lifecycleGeneration: string;
   consistent: boolean;
   activeRunIds: readonly string[];
-  exactOwners: readonly { runId: string; ownerEpoch: number }[];
+  exactOwners: readonly { runId: string; ownerEpoch: number; claimIds: readonly string[] }[];
 } {
   const state = getAgentRunRegistryState();
   const startVersion = state.version;
   const startGeneration = state.lifecycleGeneration;
   const activeRunIds: string[] = [];
-  const exactOwners: { runId: string; ownerEpoch: number }[] = [];
+  const exactOwners: { runId: string; ownerEpoch: number; claimIds: readonly string[] }[] = [];
   for (const [runId, context] of state.contexts) {
     if (context.lifecycleGeneration !== startGeneration ||
         context.sessionKey !== params.sessionKey ||
@@ -571,7 +571,7 @@ export function readAgentRunRecoveryOwnerSnapshot(params: {
     }
     if (tracked && owner.recoveryOwnerEpoch !== undefined &&
         context.agentId === params.agentId && context.sessionId === params.sessionId) {
-      exactOwners.push({ runId, ownerEpoch: owner.recoveryOwnerEpoch });
+      exactOwners.push({ runId, ownerEpoch: owner.recoveryOwnerEpoch, claimIds: [...owner.claimIds] });
     }
   }
   return {
