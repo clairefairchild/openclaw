@@ -235,7 +235,7 @@ export async function handleChatHistoryRequest({
               { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
               { runIds: inputRunIds },
             )
-          ).map((receipt) =>
+          ).receipts.map((receipt) =>
             receipt.state === "pending" &&
             !receipt.cancelled &&
             isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
