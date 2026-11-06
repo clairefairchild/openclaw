@@ -61,6 +61,11 @@ import {
 } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import { isFollowupRunAborted, isFollowupRunDeferredError, type FollowupRun } from "./types.js";
+import {
+  bindFollowupAggregateRecoverySources,
+  carryFollowupRecoveryWork,
+  startFollowupRunRecoveryWork,
+} from "./recovery-custody.js";
 
 type InternalFollowupRun = FollowupRun & {
   /** Keep admission state out of the public plugin-facing FollowupRun contract. */
@@ -618,7 +623,9 @@ function releaseQueueSummaryDeliveryForRetry(
   for (const source of delivery.sources) {
     const sourceIndex = queue.summarySources.indexOf(source);
     if (sourceIndex >= 0) {
-      queue.summarySources[sourceIndex] = createOverflowSummaryRetrySource(source);
+      const replacement = createOverflowSummaryRetrySource(source);
+      carryFollowupRecoveryWork(source, replacement);
+      queue.summarySources[sourceIndex] = replacement;
     }
     if (!source.turnAdoptionLifecycle) {
       completeFollowupRunLifecycle(source);
@@ -670,6 +677,7 @@ async function runQueueSummaryDelivery(
     : undefined;
   try {
     try {
+      await Promise.all(protectedSources.map(startFollowupRunRecoveryWork));
       await run({ abortSignal: cancellation.signal, onAdmitted });
     } catch (err) {
       if (!admitted) {
@@ -885,7 +893,7 @@ async function runSyntheticOverflowSummary(params: {
   const currentInboundEventKind = resolveOverflowSummaryInboundEventKind(params.sources);
   const runtimeMetadata = collectRuntimeMetadata(params.sources);
   let admitted = false;
-  await params.runFollowup({
+  const aggregate: FollowupRun = {
     prompt: params.prompt,
     sourceTurnId: runtimeMetadata.sourceTurnId,
     queueAbortSignal: params.source.queueAbortSignal,
@@ -928,7 +936,9 @@ async function runSyntheticOverflowSummary(params: {
       : {}),
     ...resolveOriginRoutingMetadata([params.source]),
     ...(currentInboundEventKind ? { currentInboundEventKind } : {}),
-  });
+  };
+  bindFollowupAggregateRecoverySources(aggregate, params.sources);
+  await params.runFollowup(aggregate);
 }
 
 async function drainElidedOverflowSummary(params: {
@@ -1212,7 +1222,7 @@ export function scheduleFollowupDrain(
               }
             };
             const drainGroup = async () => {
-              await effectiveRunFollowup({
+              const aggregate: FollowupRun = {
                 prompt,
                 transcriptPrompt,
                 ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
@@ -1239,7 +1249,9 @@ export function scheduleFollowupDrain(
                     }
                   : {}),
                 ...collectQueuedPromptMedia(activeGroupItems),
-              });
+              };
+              bindFollowupAggregateRecoverySources(aggregate, activeGroupItems);
+              await effectiveRunFollowup(aggregate);
             };
             try {
               // Mark active group items as in-flight so the drop policy does not
@@ -1247,6 +1259,7 @@ export function scheduleFollowupDrain(
               for (const item of activeGroupItems) {
                 queue.inFlight.add(item);
               }
+              await Promise.all(activeGroupItems.map(startFollowupRunRecoveryWork));
               await drainGroup();
             } catch (err) {
               if (admitted) {

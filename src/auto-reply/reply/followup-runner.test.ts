@@ -21,6 +21,8 @@ const state = vi.hoisted(() => ({
   execute: vi.fn(),
   resolveDecision: vi.fn(),
   clearRunContext: vi.fn(),
+  startRecovery: vi.fn(),
+  settleRecovery: vi.fn(),
 }));
 
 vi.mock("../../infra/agent-run-registry.js", () => ({
@@ -46,6 +48,12 @@ vi.mock("./followup-turn-execution.js", () => ({
 vi.mock("./followup-delivery.js", () => ({
   deliverFollowupDecision: (...args: unknown[]) => state.deliver(...args),
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
+}));
+
+vi.mock("./queue/recovery-custody.js", () => ({
+  startFollowupRunRecoveryWork: (...args: unknown[]) => state.startRecovery(...args),
+  settleFollowupRunRecoveryWork: (...args: unknown[]) => state.settleRecovery(...args),
+  followupRecoverySources: (run: FollowupRun) => [run],
 }));
 
 vi.mock("./queue.js", () => ({
@@ -158,9 +166,54 @@ beforeEach(() => {
   state.completedSourceDelivery = false;
   state.resolveDecision.mockReturnValue({ kind: "suppress", reason: "silent" });
   state.deliver.mockResolvedValue({ kind: "completed", payloads: [] });
+  state.startRecovery.mockResolvedValue(undefined);
+  state.settleRecovery.mockResolvedValue(undefined);
 });
 
 describe("createFollowupRunner", () => {
+  it("starts durable custody before admission and settles only after terminal delivery", async () => {
+    const order: string[] = [];
+    const turn = createTurn();
+    state.startRecovery.mockImplementation(async () => { order.push("start"); });
+    state.admit.mockImplementation(async () => { order.push("admit"); return { kind: "admitted", turn }; });
+    state.execute.mockImplementation(async () => { order.push("execute"); return createSettledExecution(); });
+    state.account.mockResolvedValue(undefined);
+    state.deliver.mockImplementation(async () => { order.push("deliver"); return { kind: "completed", payloads: [] }; });
+    state.settleRecovery.mockImplementation(async () => { order.push("settle"); });
+
+    await createFollowupRunner({
+      typing: createTypingController(), typingMode: "never", defaultModel: "claude",
+    })(turn.queued);
+
+    expect(order).toEqual(["start", "admit", "execute", "deliver", "settle"]);
+    expect(state.settleRecovery).toHaveBeenCalledWith(turn.queued, "terminal:run-1:completed");
+  });
+
+  it("does not admit or execute after an uncertain start acknowledgment", async () => {
+    const queued = createQueuedRun();
+    state.startRecovery.mockRejectedValueOnce(new Error("start acknowledgment unknown"));
+    await expect(createFollowupRunner({
+      typing: createTypingController(), typingMode: "never", defaultModel: "claude",
+    })(queued)).rejects.toThrow("start acknowledgment unknown");
+    expect(state.admit).not.toHaveBeenCalled();
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(state.settleRecovery).not.toHaveBeenCalled();
+  });
+
+  it("leaves terminal custody unresolved when source completion delivery fails", async () => {
+    const turn = createTurn();
+    turn.queued.queuedFollowupReplyDisposition = {
+      kind: "deliver", deliver: vi.fn(async () => { throw new Error("delivery unknown"); }),
+    };
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockResolvedValue(createSettledExecution());
+    state.account.mockResolvedValue(undefined);
+    await createFollowupRunner({
+      typing: createTypingController(), typingMode: "never", defaultModel: "claude",
+    })(turn.queued);
+    expect(state.settleRecovery).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "publishes admission notices only for consumed execution (admission succeeds=%s)",
     async (succeeds) => {
