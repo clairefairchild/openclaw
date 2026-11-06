@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -101,6 +102,48 @@ describe("durable recovery queue admission", () => {
     // Reservation is still present: accepting work did not drop or purge it.
     expect(f.db.prepare("SELECT state FROM recovery_queue_reservations WHERE work_id = ?")
       .get("later-user-work")).toEqual({ state: "settled" });
+  });
+
+  it("rejects missing identity, missing schema, and corrupt file on reopen", () => {
+    const f = fixture();
+    f.db.prepare("DELETE FROM recovery_queue_meta").run();
+    expect(() => openRunRecoveryQueueCoordinator(f.pathname)).toThrow(/identity is missing or invalid/);
+    f.db.prepare("INSERT INTO recovery_queue_meta (singleton, incarnation) VALUES (1, ?)").run(f.incarnation);
+    f.db.exec("DROP TABLE recovery_queue_cutovers");
+    expect(() => openRunRecoveryQueueCoordinator(f.pathname)).toThrow(/schema is missing or unknown/);
+
+    const damaged = path.join(f.root, "damaged.sqlite");
+    fs.writeFileSync(damaged, Buffer.from("not a SQLite database"));
+    expect(() => openRunRecoveryQueueCoordinator(damaged)).toThrow();
+    expect(fs.readFileSync(damaged)).toEqual(Buffer.from("not a SQLite database"));
+  });
+
+  it("refuses unknown custody and a revoked write before commit", () => {
+    const f = fixture();
+    f.db.exec("PRAGMA ignore_check_constraints = ON");
+    f.db.prepare(`INSERT INTO recovery_queue_reservations
+      (work_id, queue_kind, scope_kind, agent_id, session_id, state, reserved_at)
+      VALUES ('unknown', 'followup', 'exact', 'agent-a', 'session-a', 'unknown', 1)`).run();
+    expect(() => reserveRecoveryQueueWork(f.db, f.exact("later"))).toThrow(/unknown custody state/);
+    expect(f.db.prepare("SELECT work_id FROM recovery_queue_reservations WHERE work_id = 'later'").get())
+      .toBeUndefined();
+    f.db.prepare("DELETE FROM recovery_queue_reservations WHERE work_id = 'unknown'").run();
+    let checks = 0;
+    const authority = { assertCurrent: () => {
+      if (++checks === 3) throw new Error("owner revoked before commit");
+    } };
+    expect(() => reserveRecoveryQueueWork(f.db, f.exact("later"), authority))
+      .toThrow(/owner revoked before commit/);
+    expect(f.db.prepare("SELECT work_id FROM recovery_queue_reservations WHERE work_id = 'later'").get())
+      .toBeUndefined();
+  });
+
+  it("rejects a changed but well-formed incarnation after restart", () => {
+    const f = fixture();
+    f.db.prepare("UPDATE recovery_queue_meta SET incarnation = ? WHERE singleton = 1").run(randomUUID());
+    const reopened = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(reopened);
+    expect(() => reserveRecoveryQueueWork(reopened, f.exact("later"))).toThrow(/incarnation changed/);
   });
 
   it("serializes concurrent reservations from distinct processes", async () => {

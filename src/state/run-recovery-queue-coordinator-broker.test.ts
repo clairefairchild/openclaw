@@ -13,6 +13,8 @@ afterEach(() => {
 // exercise it in a fresh main-thread host process instead of bypassing that gate.
 const source = `
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { openRecoveryQueueCoordinatorBroker } from './src/state/run-recovery-queue-coordinator-broker.ts';
 const databasePath = process.argv[1];
@@ -21,6 +23,13 @@ const work = { workId: 'followup-1', queue: 'followup',
 const first = await openRecoveryQueueCoordinatorBroker(databasePath);
 try {
   assert.equal(await first.reserve(work), 'reserved');
+  const contender = spawnSync(process.execPath, [
+    '--import', './scripts/tsx.mjs', '--input-type=module', '--eval',
+    "import { openRecoveryQueueCoordinatorBroker } from './src/state/run-recovery-queue-coordinator-broker.ts'; try { await openRecoveryQueueCoordinatorBroker(process.argv[1]); process.exit(0); } catch (error) { console.error(error.message); process.exit(7); }",
+    databasePath,
+  ], { cwd: process.cwd(), encoding: 'utf8', timeout: 15000 });
+  assert.equal(contender.status, 7, contender.stderr);
+  assert.match(contender.stderr, /busy|Contention|ownership/i);
   assert.equal(await first.reserve(work), 'repeated');
   const read = new DatabaseSync(databasePath);
   assert.equal(read.prepare('SELECT state FROM recovery_queue_reservations WHERE work_id = ?')
@@ -38,7 +47,7 @@ try {
     await assert.rejects(second.reserve({ ...work, scope: { kind: 'unmarked' } }), /work ID collision/);
     const db = new DatabaseSync(databasePath);
     db.prepare('UPDATE recovery_queue_meta SET incarnation = ? WHERE singleton = 1')
-      .run('replacement');
+      .run(randomUUID());
     db.close();
     await assert.rejects(second.reserve({ ...work, workId: 'later' }), /incarnation changed/);
   } finally { await second.close(); }

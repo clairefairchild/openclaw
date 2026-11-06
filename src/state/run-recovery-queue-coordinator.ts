@@ -5,11 +5,12 @@
  * No producer is cut over yet, so production claim intent is always held.
  */
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 
 export type RecoveryQueueKind = "followup" | "command-lane";
@@ -44,6 +45,15 @@ type ReservationRow = {
   terminal_receipt_id: string | null;
 };
 type IntentRow = { intent_id: string; generation: string; state: "prepared" | "invalidated" };
+export type RecoveryQueueWriteAuthority = { assertCurrent(): void };
+
+function writeTransaction<T>(db: DatabaseSync, authority: RecoveryQueueWriteAuthority | undefined, operation: () => T): T {
+  authority?.assertCurrent();
+  return runSqliteImmediateTransactionSync(db, () => {
+    authority?.assertCurrent();
+    return operation();
+  }, { withCommit: authority ? (commit) => { authority.assertCurrent(); commit(); } : undefined });
+}
 
 /** A global file, not an agent DB. Never point this at an incognito agent store. */
 export function resolveRunRecoveryQueueCoordinatorPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -51,16 +61,49 @@ export function resolveRunRecoveryQueueCoordinatorPath(env: NodeJS.ProcessEnv = 
 }
 
 /** Caller owns the returned connection. Opening does not assert producer cutover. */
-export function openRunRecoveryQueueCoordinator(pathname = resolveRunRecoveryQueueCoordinatorPath()): DatabaseSync {
+export function openRunRecoveryQueueCoordinator(
+  pathname = resolveRunRecoveryQueueCoordinatorPath(), authority?: RecoveryQueueWriteAuthority,
+): DatabaseSync {
+  authority?.assertCurrent();
+  const existing = existsSync(pathname);
   mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
   const db = openNodeSqliteDatabase(pathname);
-  db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;"); // sqlite-allow-raw -- Connection pragmas.
-  ensureRunRecoveryQueueCoordinatorSchema(db);
-  return db;
+  try {
+    db.exec("PRAGMA busy_timeout = 5000;"); // sqlite-allow-raw -- Connection pragma.
+    if (existing) {
+      // Never recreate a missing identity or table in an existing ledger.
+      assertSqliteIntegrity(db, "run recovery queue coordinator");
+      assertRecoveryQueueSchema(db);
+    } else {
+      db.exec("PRAGMA journal_mode = WAL;"); // sqlite-allow-raw -- New ledger connection policy.
+      ensureRunRecoveryQueueCoordinatorSchema(db, authority);
+      assertSqliteIntegrity(db, "run recovery queue coordinator");
+    }
+    readRecoveryQueueIncarnation(db);
+    db.exec("PRAGMA journal_mode = WAL;"); // sqlite-allow-raw -- Only after integrity admission.
+    authority?.assertCurrent();
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 }
 
-export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync): void {
-  runSqliteImmediateTransactionSync(db, () => {
+const REQUIRED_TABLES = [
+  "recovery_queue_meta", "recovery_queue_cutovers", "recovery_queue_reservations", "recovery_claim_intents",
+] as const;
+
+function assertRecoveryQueueSchema(db: DatabaseSync): void {
+  const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'recovery_%'")
+    .all() as Array<{ name: string }>;
+  const names = new Set(rows.map((row) => row.name));
+  if (REQUIRED_TABLES.some((name) => !names.has(name))) {
+    throw new Error("Recovery queue coordinator schema is missing or unknown");
+  }
+}
+
+export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync, authority?: RecoveryQueueWriteAuthority): void {
+  writeTransaction(db, authority, () => {
     db.exec(`
       CREATE TABLE IF NOT EXISTS recovery_queue_meta (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -104,18 +147,38 @@ export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync): void 
 }
 
 export function readRecoveryQueueIncarnation(db: DatabaseSync): string {
-  const row = db.prepare("SELECT incarnation FROM recovery_queue_meta WHERE singleton = 1")
-    .get() as MetaRow | undefined; // sqlite-allow-raw -- Coordinator identity.
-  if (!row?.incarnation) {
-    throw new Error("Recovery queue coordinator has no identity");
+  const rows = db.prepare("SELECT incarnation FROM recovery_queue_meta").all() as MetaRow[]; // sqlite-allow-raw -- Exact singleton identity.
+  if (rows.length !== 1 || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(rows[0].incarnation)) {
+    throw new Error("Recovery queue coordinator identity is missing or invalid");
   }
-  return row.incarnation;
+  return rows[0].incarnation;
+}
+
+function assertRecoveryQueueLedgerKnown(db: DatabaseSync): void {
+  const invalidCutover = db.prepare("SELECT 1 FROM recovery_queue_cutovers WHERE queue_kind IS NULL OR queue_kind NOT IN ('followup', 'command-lane') LIMIT 1").get();
+  const invalidReservation = db.prepare(`SELECT 1 FROM recovery_queue_reservations WHERE
+    work_id IS NULL OR trim(work_id) = ''
+    OR queue_kind IS NULL OR queue_kind NOT IN ('followup', 'command-lane')
+    OR state IS NULL OR state NOT IN ('queued', 'in_flight', 'settled')
+    OR scope_kind IS NULL OR scope_kind NOT IN ('exact', 'unmarked')
+    OR (scope_kind = 'unmarked' AND (agent_id IS NOT NULL OR session_id IS NOT NULL))
+    OR (scope_kind = 'exact' AND (agent_id IS NULL OR trim(agent_id) = '' OR session_id IS NULL OR trim(session_id) = ''))
+    OR (state = 'settled' AND (terminal_receipt_id IS NULL OR trim(terminal_receipt_id) = ''))
+    OR (state <> 'settled' AND terminal_receipt_id IS NOT NULL) LIMIT 1`).get();
+  const invalidIntent = db.prepare(`SELECT 1 FROM recovery_claim_intents WHERE
+    state IS NULL OR state NOT IN ('prepared', 'invalidated')
+    OR trim(agent_id) = '' OR trim(session_id) = '' OR trim(obligation_id) = ''
+    OR trim(generation) = '' LIMIT 1`).get();
+  if (invalidCutover || invalidReservation || invalidIntent) {
+    throw new Error("Recovery queue coordinator contains unknown custody state");
+  }
 }
 
 function assertIncarnation(db: DatabaseSync, expected: string): void {
   if (!expected || readRecoveryQueueIncarnation(db) !== expected) {
     throw new Error("Recovery queue coordinator incarnation changed");
   }
+  assertRecoveryQueueLedgerKnown(db);
 }
 
 function assertIdentity(value: string, label: string): void {
@@ -130,13 +193,13 @@ function readReservation(db: DatabaseSync, workId: string): ReservationRow | und
 }
 
 /** Reserve before queue publication. Repeated exact identity is safe; collision fails. */
-export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueReservation): "reserved" | "repeated" {
+export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueReservation, authority?: RecoveryQueueWriteAuthority): "reserved" | "repeated" {
   assertIdentity(input.workId, "work ID");
   if (input.scope.kind === "exact") {
     assertIdentity(input.scope.agentId, "agent ID");
     assertIdentity(input.scope.sessionId, "session ID");
   }
-  return runSqliteImmediateTransactionSync<"reserved" | "repeated">(db, () => {
+  return writeTransaction<"reserved" | "repeated">(db, authority, () => {
     assertIncarnation(db, input.incarnation);
     const existing = readReservation(db, input.workId);
     const agentId = input.scope.kind === "exact" ? input.scope.agentId : null;
@@ -167,8 +230,8 @@ export function reserveRecoveryQueueWork(db: DatabaseSync, input: RecoveryQueueR
 }
 
 /** The queue owner calls this immediately before starting its task. */
-export function startRecoveryQueueWork(db: DatabaseSync, incarnation: string, workId: string): "started" | "repeated" {
-  return runSqliteImmediateTransactionSync<"started" | "repeated">(db, () => {
+export function startRecoveryQueueWork(db: DatabaseSync, incarnation: string, workId: string, authority?: RecoveryQueueWriteAuthority): "started" | "repeated" {
+  return writeTransaction<"started" | "repeated">(db, authority, () => {
     assertIncarnation(db, incarnation);
     const row = readReservation(db, workId);
     if (!row || row.state === "settled") {
@@ -185,10 +248,10 @@ export function startRecoveryQueueWork(db: DatabaseSync, incarnation: string, wo
 
 /** A terminal custody receipt is required. Mere dequeue or process death is not settlement. */
 export function settleRecoveryQueueWork(
-  db: DatabaseSync, incarnation: string, workId: string, terminalReceiptId: string,
+  db: DatabaseSync, incarnation: string, workId: string, terminalReceiptId: string, authority?: RecoveryQueueWriteAuthority,
 ): "settled" | "repeated" {
   assertIdentity(terminalReceiptId, "terminal receipt");
-  return runSqliteImmediateTransactionSync<"settled" | "repeated">(db, () => {
+  return writeTransaction<"settled" | "repeated">(db, authority, () => {
     assertIncarnation(db, incarnation);
     const row = readReservation(db, workId);
     if (!row) {
@@ -213,9 +276,9 @@ export function settleRecoveryQueueWork(
  * No production caller marks either kind in Stage 1.
  */
 export function markRecoveryQueueProducerCutOver(
-  db: DatabaseSync, incarnation: string, queue: RecoveryQueueKind,
+  db: DatabaseSync, incarnation: string, queue: RecoveryQueueKind, authority?: RecoveryQueueWriteAuthority,
 ): void {
-  runSqliteImmediateTransactionSync(db, () => {
+  writeTransaction(db, authority, () => {
     assertIncarnation(db, incarnation);
     db.prepare("INSERT OR IGNORE INTO recovery_queue_cutovers (queue_kind, completed_at) VALUES (?, ?)")
       .run(queue, Date.now()); // sqlite-allow-raw -- Migration gate.
@@ -224,12 +287,12 @@ export function markRecoveryQueueProducerCutOver(
 
 /** Intent and reservation absence are compared under one BEGIN IMMEDIATE lock. */
 export function prepareRecoveryClaimIntent(
-  db: DatabaseSync, identity: RecoveryClaimIdentity,
+  db: DatabaseSync, identity: RecoveryClaimIdentity, authority?: RecoveryQueueWriteAuthority,
 ): RecoveryClaimIntentResult {
   for (const [label, value] of Object.entries(identity)) {
     assertIdentity(value, label);
   }
-  return runSqliteImmediateTransactionSync<RecoveryClaimIntentResult>(db, () => {
+  return writeTransaction<RecoveryClaimIntentResult>(db, authority, () => {
     assertIncarnation(db, identity.incarnation);
     const cutovers = db.prepare("SELECT COUNT(*) AS count FROM recovery_queue_cutovers WHERE queue_kind IN ('followup', 'command-lane')")
       .get() as { count: number }; // sqlite-allow-raw -- Both producer families required.
