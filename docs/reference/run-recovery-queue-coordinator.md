@@ -19,3 +19,9 @@ Claim intent compares both producer cutover markers and all unresolved relevant 
 5. Add authoritative reconciliation for ambiguous terminal receipts and accepted input/delivery. Never clear a reservation merely because its producer process died. Review source-route and semantic eligibility separately before any recovery send.
 
 No live Gateway code, install, restart, cron, Run, or source-delivery path is changed by Stage 1. Rollback is to leave the new coordinator unused and retain its SQLite rows, claims, and receipts for later reconciliation. Never delete the ledger to force a clear result.
+
+## Stage 2 guarded broker foundation (incomplete)
+
+The coordinator now has a SQLite worker-broker backend and an async host facade for reserve, start, and settle. Its incarnation is captured on open and checked by each write transaction. This moves the future producer's SQLite I/O off the Gateway main thread, but it is **not** producer cutover. No production followup enqueue, drain, abort, overflow, collect, steering, or terminal path calls the facade yet. Existing in-memory work is not reconciled and no producer cutover marker is written. The authoritative recovery answer remains `queue_not_cut_over` (UNKNOWN), regardless of empty queue snapshots.
+
+The followup cutover must make all production ingress async before publication, reconcile rejected/deduplicated work and all terminal custody receipts, then account for summary and collect source ownership before marking the producer. The broker itself must also be bound to the global state database owner and its integrity admission before a production caller uses it. A crash after an ambiguous broker write requires readback by stable work ID before retry. Do not settle on process death or merely because the queue was cleared.
