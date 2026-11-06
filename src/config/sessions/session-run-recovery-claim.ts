@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase, OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { ensureSessionRunRecoveryClaimsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 
