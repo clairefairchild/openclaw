@@ -8,6 +8,7 @@ import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
@@ -132,6 +133,12 @@ export function readShellView(host: ShellViewHost) {
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
+  const initialGatewayConnection =
+    !nativeEmbed &&
+    !runtime.warmBoot &&
+    !presentationScope.readyOnce &&
+    !gatewayConnected &&
+    host.routeState.routeId === undefined;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
     nativeEmbed &&
@@ -149,16 +156,18 @@ export function readShellView(host: ShellViewHost) {
   };
   const mobileNavLayout = isMobileNavLayout();
   const nativeWebChrome = isNativeWebChromeHost() && !nativeEmbed;
-  const mergedChatChrome = shouldMergeChatChrome({
-    mobileNavLayout,
-    routeId: activeRoute,
-    onboarding,
-  });
+  const mergedChatChrome =
+    !initialGatewayConnection &&
+    shouldMergeChatChrome({
+      mobileNavLayout,
+      routeId: activeRoute,
+      onboarding,
+    });
   const floatingHeader =
     !nativeEmbed &&
     shouldFloatShellHeader({
       mobileNavLayout,
-      routeId: activeRoute,
+      routeId: initialGatewayConnection ? "connection" : activeRoute,
       onboarding,
     });
   const backTarget =
@@ -233,6 +242,7 @@ export function readShellView(host: ShellViewHost) {
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
   const sidebarProperties = {
+    connectionPending: initialGatewayConnection,
     basePath: context.basePath,
     activeRouteId: activeRoute,
     router: runtime.router,
@@ -286,7 +296,11 @@ export function readShellView(host: ShellViewHost) {
   };
   // The floating refresh notice takes the badge's place below the phone header.
   const mobileGatewayStatus = () =>
-    mobileNavLayout && !navDrawerOpen() && !nativeEmbed && !controlUiRefreshRequired
+    mobileNavLayout &&
+    !navDrawerOpen() &&
+    !nativeEmbed &&
+    !controlUiRefreshRequired &&
+    !initialGatewayConnection
       ? gatewayStatus
       : null;
   const floatingUpdateCard = {
@@ -298,7 +312,7 @@ export function readShellView(host: ShellViewHost) {
     compact: mergedChatChrome && !controlUiRefreshRequired,
     statusBanner: overlaySnapshot.updateStatusBanner,
     updateRun: overlaySnapshot.updateRun,
-    refreshRequired: controlUiRefreshRequired,
+    refreshRequired: controlUiRefreshRequired && !initialGatewayConnection,
     onRefresh: host.refreshControlUi,
     onNavigate: host.shellNavigation.navigate,
   };
@@ -324,6 +338,7 @@ export function readShellView(host: ShellViewHost) {
   return {
     nowMs: Date.now(),
     routeReady: host.routeState.routeId !== undefined || host.routeState.routeFailed,
+    initialGatewayConnection,
     workspaceChromeVisible: host.workspaceChromeVisible,
     context,
     runtime,
@@ -359,6 +374,9 @@ export function readShellView(host: ShellViewHost) {
     floatingHeader,
     floatingBack,
     get pageTitle() {
+      if (initialGatewayConnection) {
+        return t("connection.workspace.header");
+      }
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
