@@ -388,7 +388,10 @@ describe("background work admission", () => {
       order.push(2);
     });
     try {
-      expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 2 });
+      // The guarded producer waits for a durable reservation before publication.
+      await vi.waitFor(() => {
+        expect(getBackgroundWorkSnapshot()).toMatchObject({ activeCount: 3, queuedCount: 2 });
+      });
       await expect(enqueueCommandInLane(CommandLane.Main, async () => "foreground")).resolves.toBe(
         "foreground",
       );
