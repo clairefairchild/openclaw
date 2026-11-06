@@ -14,11 +14,11 @@ jobs:
       - name: Check out exact recovery source commit
         uses: actions/checkout@v4
         with:
-          ref: 80e1b0c91b3c5f0d5147f76dd795fa9fb17edf63
+          ref: d05edbddeeee600589604425914e57a86f72af64
           persist-credentials: false
 
       - name: Verify source identity
-        run: test "$(git rev-parse HEAD)" = 80e1b0c91b3c5f0d5147f76dd795fa9fb17edf63
+        run: test "$(git rev-parse HEAD)" = d05edbddeeee600589604425914e57a86f72af64
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -42,6 +42,7 @@ jobs:
           src/gateway/session-lifecycle-state.persistence.test.ts
           src/gateway/session-lifecycle-state.recovery.test.ts
           src/config/sessions/session-accessor.pending-inputs.test.ts
+          src/state/run-recovery-queue-coordinator.test.ts
 
       - name: Core typecheck
         run: pnpm tsgo:core
