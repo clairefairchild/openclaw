@@ -40,6 +40,8 @@ jobs:
           src/gateway/server-methods/system-agent-concurrency.test.ts
           src/cron/service.wake-now-real-heartbeat.test.ts
           src/auto-reply/reply/queue/recovery-custody.test.ts
+          src/auto-reply/reply/queue/recovery-ingress.test.ts
+          src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts
           src/auto-reply/reply/queue.in-flight.test.ts
           src/auto-reply/reply/queue.collect.test.ts
           src/auto-reply/reply/followup-runner.test.ts
