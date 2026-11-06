@@ -55,7 +55,7 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
-const enqueueFollowupRunMock = vi.fn();
+const enqueueActiveRunWithReservationMock = vi.fn();
 const compactEmbeddedAgentSessionMock = vi.fn();
 
 vi.mock("../../agents/embedded-agent.js", () => ({
@@ -113,7 +113,9 @@ vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
     ...actual,
-    enqueueFollowupWithRecoveryReservation: (...args: unknown[]) => enqueueFollowupRunMock(...args),
+    enqueueFollowupWithRecoveryReservation: vi.fn(),
+    enqueueActiveRunFollowupWithRecoveryReservation: (...args: unknown[]) =>
+      enqueueActiveRunWithReservationMock(...args),
   };
 });
 
@@ -242,7 +244,7 @@ describe("runReplyAgent runtime config", () => {
     runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
-    enqueueFollowupRunMock.mockReset();
+    enqueueActiveRunWithReservationMock.mockReset();
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
     resolveReplyToModeMock.mockReturnValue("all");
@@ -773,19 +775,17 @@ describe("runReplyAgent runtime config", () => {
     });
     const runState: ReplyOperationRunState = {};
     replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-    enqueueFollowupRunMock.mockReturnValueOnce(true);
+    enqueueActiveRunWithReservationMock.mockReturnValueOnce(true);
 
     await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
 
     expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
-    expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
-    const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
+    expect(enqueueActiveRunWithReservationMock).toHaveBeenCalledTimes(1);
+    const enqueueCall = enqueueActiveRunWithReservationMock.mock.calls.at(0);
     expect(enqueueCall?.[0]).toBe("main");
     expect(enqueueCall?.[1]).toBe(followupRun);
     expect(enqueueCall?.[2]).toBe(resolvedQueue);
-    expect(enqueueCall?.[3]).toBe("message-id");
-    expect(typeof enqueueCall?.[4]).toBe("function");
-    expect(enqueueCall?.[5]).toBe(false);
+    expect(typeof enqueueCall?.[3]).toBe("function");
   });
 });

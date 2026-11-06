@@ -62,7 +62,7 @@ import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.j
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   clearSessionQueues,
-  enqueueFollowupRun,
+  enqueueActiveRunFollowupWithRecoveryReservation,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -322,7 +322,7 @@ vi.mock("../../gateway/mcp-app-channel-action.js", () => ({
 
 vi.mock("./queue.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./queue.js")>()),
-  enqueueFollowupRun: vi.fn(),
+  enqueueActiveRunFollowupWithRecoveryReservation: vi.fn(),
   enqueueFollowupWithRecoveryReservation: vi.fn(),
   parkSteerCandidate: parkedSteer.park,
   parkSteerCandidateWithRecoveryReservation: parkedSteer.park,
@@ -369,7 +369,7 @@ beforeEach(() => {
     fallback: parkedSteer.fallback,
     consume: parkedSteer.consume,
   });
-  vi.mocked(enqueueFollowupRun).mockReset().mockReturnValue(true);
+  vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation).mockReset().mockResolvedValue(true);
   vi.mocked(refreshQueuedFollowupSession).mockReset();
   vi.mocked(scheduleFollowupDrain).mockReset();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
@@ -672,7 +672,7 @@ describe("runReplyAgent active steering", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
     active.complete();
   });
 
@@ -842,7 +842,7 @@ describe("runReplyAgent active steering", () => {
         pendingInputAuthorityFingerprint: active.toolAuthorityFingerprint,
       }),
     );
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     active.complete();
   });
 
@@ -872,7 +872,7 @@ describe("runReplyAgent active steering", () => {
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     provided.complete();
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
@@ -1090,7 +1090,7 @@ describe("runReplyAgent active steering", () => {
 
     expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -1336,7 +1336,7 @@ describe("runReplyAgent active steering", () => {
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
     active.complete();
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
@@ -1375,7 +1375,7 @@ describe("runReplyAgent active steering", () => {
 
     await expect(run()).resolves.toBeUndefined();
 
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalled();
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -1657,7 +1657,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
     expect(runState.admission).toEqual({ status: "skipped", reason: "active-run" });
@@ -1677,7 +1677,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
@@ -1693,7 +1693,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -1710,7 +1710,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     await expect(run()).resolves.toBeUndefined();
 
     expect(state.beforeAgentReplyRunMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -1735,9 +1735,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
   });
 
   it("records queue-cap rejection while cleaning up typing", async () => {
-    vi.mocked(enqueueFollowupRun).mockImplementationOnce((...args) => {
+    vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation).mockImplementationOnce((...args) => {
       args[1].onQueueDisposition?.("queue-cap-new");
-      return false;
+      return Promise.resolve(false);
     });
     const runState: ReplyOperationRunState = {};
     const { run, typing } = createMinimalRun({
@@ -1751,7 +1751,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
@@ -1775,7 +1775,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
@@ -1796,8 +1796,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation).mock.calls[0]).toHaveLength(4);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
@@ -1819,7 +1819,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     await run();
 
-    expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation).mock.calls[0]).toHaveLength(4);
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
 
     active.complete();
@@ -4469,7 +4469,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     queued.followupRun.originatingChatType = "group";
     try {
       await queued.run();
-      expect(enqueueFollowupRun).toHaveBeenCalledOnce();
+      expect(enqueueActiveRunFollowupWithRecoveryReservation).toHaveBeenCalledOnce();
       expect(scheduleFollowupDrain).not.toHaveBeenCalled();
       finishHelper.resolve();
       const helperReply = await helper;
