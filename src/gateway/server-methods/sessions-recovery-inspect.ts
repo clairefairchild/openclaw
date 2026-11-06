@@ -5,6 +5,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
 import { fingerprintRunRecoverySourceRoute } from "../../config/sessions/run-recovery-source-route.js";
+import { runWithSessionRecoveryAdmissionInspection } from "../../sessions/session-lifecycle-admission.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import { inspectGatewayRunRecovery } from "../session-run-recovery-inspect-service.js";
@@ -91,6 +92,9 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
         // An unavailable or ambiguous durable read remains unknown.
       }
     }
+    await runWithSessionRecoveryAdmissionInspection({
+      scope: target.storePath, sessionKey: target.canonicalKey, sessionId: entry.sessionId,
+      run: () => {
     // Authorization and the session row may change while awaiting the worker.
     sessionMutationAuthorization?.assertCurrent();
     const currentCfg = context.getRuntimeConfig();
@@ -141,6 +145,7 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       entry: currentEntry,
       placement,
       pendingInputReceipts,
+      admissionLockHeld: true,
       chatAbortControllers: context.chatAbortControllers,
       chatQueuedTurns: context.chatQueuedTurns,
       ...(sourceRouteDigest
@@ -156,5 +161,7 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
     }
     sessionMutationAuthorization?.assertCurrent();
     respond(true, result);
+      },
+    });
   },
 };

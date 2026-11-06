@@ -383,18 +383,30 @@ export function readSessionRecoveryAdmissionSnapshot(params: {
   const matching = new Set<SessionWorkAdmission>();
   for (const identity of identities) {
     for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      // A key-only or ID-only lease owns that identity. A multi-identity lease
-      // must bind both, so another session cannot be projected onto this one.
-      if (admission.identities.size === 1 ||
-          identities.every((target) => admission.identities.has(target))) {
-        matching.add(admission);
-      }
+      // A different incarnation or competing turn may reserve the same key
+      // with another ID. Either overlapping identity vetoes no-overlap.
+      matching.add(admission);
     }
   }
   return {
     active: [...matching].some((admission) => admission.phase === "acquired"),
     pending: [...matching].some((admission) => admission.phase === "pending"),
   };
+}
+
+/** Read owner-owned admission custody while holding the same identity locks
+ * used by new admissions. This does not fence unrelated queue/process owners. */
+export function runWithSessionRecoveryAdmissionInspection<T>(params: {
+  scope: string;
+  sessionKey: string;
+  sessionId: string;
+  run: () => T;
+}): Promise<T> {
+  return runExclusiveSessionLifecycle({
+    scope: params.scope,
+    identities: [params.sessionKey, params.sessionId],
+    run: async () => params.run(),
+  });
 }
 
 export function isSessionWorkAdmissionActive(

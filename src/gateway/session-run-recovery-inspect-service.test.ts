@@ -24,6 +24,16 @@ function inspect(overrides: Partial<Parameters<typeof inspectGatewayRunRecovery>
 }
 
 describe("read-only run recovery inspection", () => {
+  it("promotes only a lifecycle-lock-backed empty admission index to clear", () => {
+    expect(inspect().evidence.pendingAdmission).toEqual({ complete: false, state: "unknown" });
+    expect(inspect({ admissionLockHeld: true }).evidence.pendingAdmission)
+      .toEqual({ complete: true, state: "clear" });
+    expect(inspect({ admissionLockHeld: true, readAdmissions: () => ({
+      pending: true, active: false,
+    }) }).evidence.pendingAdmission).toEqual({ complete: true, state: "active" });
+    expect(inspect({ admissionLockHeld: true }).evidence.direct.state).toBe("unknown");
+    expect(inspect({ admissionLockHeld: true }).reviewToken).toBeUndefined();
+  });
   it("keeps missing run and old running status unknown, with no token or transcript", () => {
     for (const selected of [entry, { ...entry, lifecycleRunId: undefined, lastRunId: undefined }]) {
       const result = inspect({ entry: selected });

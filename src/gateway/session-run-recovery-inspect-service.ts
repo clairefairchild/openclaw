@@ -38,6 +38,8 @@ export function inspectGatewayRunRecovery(params: {
   }>;
   readRunOwners?: typeof readAgentRunRecoveryOwnerSnapshot;
   readAdmissions?: typeof readSessionRecoveryAdmissionSnapshot;
+  /** Set only by the lifecycle owner after acquiring both identity locks. */
+  admissionLockHeld?: boolean;
   readQueuedCommand?: typeof hasQueuedCommandForRecoverySession;
   readTrackedProcess?: typeof hasTrackedProcessForRecoverySession;
 }): SessionsRecoveryInspectResult {
@@ -168,7 +170,8 @@ export function inspectGatewayRunRecovery(params: {
     evidence: {
       direct: (owners.consistent && owners.activeRunIds.length > 0) ||
         directControllerActive ? ACTIVE : UNKNOWN,
-      pendingAdmission: admissions.pending || admissions.active ? ACTIVE : UNKNOWN,
+      pendingAdmission: admissions.pending || admissions.active ? ACTIVE :
+        params.admissionLockHeld ? { complete: true, state: "clear" } : UNKNOWN,
       followupQueue: queuedTurnActive ? ACTIVE : UNKNOWN,
       laneQueue: queuedCommandActive ? ACTIVE : UNKNOWN,
       pendingInput: pendingInputActive ? ACTIVE : UNKNOWN,
