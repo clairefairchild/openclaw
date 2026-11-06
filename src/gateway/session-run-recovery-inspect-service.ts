@@ -73,9 +73,11 @@ export function inspectGatewayRunRecovery(params: {
     hasTrackedProcessForRecoverySession)(agentId, key);
   // These Gateway maps are owner-owned and sampled in this same synchronous
   // call. A same-key/session queued entry vetoes even without an agent marker.
+  // An explicitly different agent remains outside this caller-visible scope.
   // Queue disappearance, process restart, or an intervening enqueue cannot
   // establish absence at the SQLite claim transaction boundary.
   const matches = (candidate: { agentId?: string; sessionKey: string; sessionId: string }) =>
+    (candidate.agentId === undefined || candidate.agentId === agentId) &&
     candidate.sessionKey === key && candidate.sessionId === entry.sessionId;
   const directControllerRunIds = [...(params.chatAbortControllers?.entries() ?? [])]
     .filter(([, controller]) => matches(controller)).map(([runId]) => runId);

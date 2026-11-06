@@ -332,14 +332,12 @@ describe("read-only run recovery inspection", () => {
     expect(unknown.evidence.process).toEqual({ complete: false, state: "unknown" });
     expect(unknown.reviewToken).toBeUndefined();
   });
-  it("vetoes queued followups with missing or conflicting agent markers", () => {
+  it("vetoes queued followups with a missing agent marker", () => {
     const controller = new AbortController();
     const scope = { controller, sessionKey: "agent:main:main", sessionId: "s1" };
-    for (const candidate of [scope, { ...scope, agentId: "other" }]) {
-      const result = inspect({ chatQueuedTurns: new Map([["queued-run", candidate]]) });
-      expect(result.evidence.followupQueue).toEqual({ complete: true, state: "active" });
-      expect(result.reviewToken).toBeUndefined();
-    }
+    const result = inspect({ chatQueuedTurns: new Map([["queued-run", scope]]) });
+    expect(result.evidence.followupQueue).toEqual({ complete: true, state: "active" });
+    expect(result.reviewToken).toBeUndefined();
     expect(inspect({ chatQueuedTurns: new Map([["queued-run", {
       ...scope, sessionId: "old-session",
     }]]) }).evidence.followupQueue).toEqual({ complete: false, state: "unknown" });
