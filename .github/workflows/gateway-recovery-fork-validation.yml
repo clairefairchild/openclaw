@@ -33,4 +33,10 @@ jobs:
       - name: Core typecheck
         run: pnpm tsgo:core
       - name: Focused command custody tests
-        run: pnpm test src/process/command-queue.recovery-custody.test.ts src/process/command-queue.test.ts
+        run: >-
+          pnpm test
+          src/process/command-queue.recovery-custody.test.ts
+          src/process/command-queue.test.ts
+          src/gateway/server-methods/system-agent-concurrency.test.ts
+          src/cron/service.wake-now-real-heartbeat.test.ts
+          src/agents/embedded-agent-runner/run/lane-controller.test.ts
