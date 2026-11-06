@@ -93,7 +93,7 @@ export function inspectGatewayRunRecovery(params: {
     typeof receipt.lifecycleGeneration === "string" &&
     receipt.lifecycleGeneration.length > 0 &&
     Number.isFinite(receipt.endedAt) && receipt.endedAt > 0 &&
-    entry.status === receipt.status && entry.status !== "running" &&
+    entry.status === receipt.status &&
     owners.activeRunIds.length === 0 && !directControllerActive;
   const input = entry.runRecoveryOriginalInputReceipt;
   const inputBound = terminalBound && input && !input.invalidated &&
