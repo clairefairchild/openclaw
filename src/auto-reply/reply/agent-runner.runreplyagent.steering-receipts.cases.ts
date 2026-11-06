@@ -6,8 +6,8 @@ import type { TemplateContext } from "../templating.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   clearSessionQueues,
-  enqueueFollowupRun,
-  parkSteerCandidate,
+  enqueueActiveRunFollowupWithRecoveryReservation,
+  parkSteerCandidateWithRecoveryReservation,
   type FollowupRun,
 } from "./queue.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -52,7 +52,9 @@ export function registerSteeringReceiptCases({
     "keeps a rejected steer skipped when drop:%s discards it",
     async (dropPolicy) => {
       const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-      vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
+      vi.mocked(parkSteerCandidateWithRecoveryReservation).mockImplementation(
+      async (...args) => actualQueue.parkSteerCandidate(...args),
+    );
       const active = createReplyOperation({
         sessionKey: "main",
         sessionId: "session",
@@ -106,7 +108,9 @@ export function registerSteeringReceiptCases({
 
   it("queues a waiting steer when its predecessor outlives terminal delivery", async () => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-    vi.mocked(parkSteerCandidate).mockImplementation(actualQueue.parkSteerCandidate);
+    vi.mocked(parkSteerCandidateWithRecoveryReservation).mockImplementation(
+      async (...args) => actualQueue.parkSteerCandidate(...args),
+    );
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       status: "running",
       restartRecoveryDeliveryRunId: "active-recovery",
@@ -238,7 +242,7 @@ export function registerSteeringReceiptCases({
       expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
       expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
       expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-      expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+      expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
       active.complete();
     });
   }
@@ -285,7 +289,7 @@ export function registerSteeringReceiptCases({
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
     active.complete();
   });
 
@@ -331,7 +335,7 @@ export function registerSteeringReceiptCases({
 
     expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
     active.complete();
   });
 
@@ -376,7 +380,7 @@ export function registerSteeringReceiptCases({
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
     active.complete();
   });
 
@@ -420,7 +424,7 @@ export function registerSteeringReceiptCases({
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).toHaveBeenCalledOnce();
     active.complete();
   });
 
@@ -461,6 +465,6 @@ export function registerSteeringReceiptCases({
     expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
     expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueActiveRunFollowupWithRecoveryReservation)).not.toHaveBeenCalled();
   });
 }
