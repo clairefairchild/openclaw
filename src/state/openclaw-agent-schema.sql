@@ -1001,6 +1001,35 @@ CREATE TABLE IF NOT EXISTS session_pending_inputs (
 CREATE INDEX IF NOT EXISTS idx_agent_session_pending_inputs_session
   ON session_pending_inputs(session_key, session_id, seq DESC);
 
+-- Recovery preparation is a durable reservation, never dispatch authority.
+CREATE TABLE IF NOT EXISTS session_run_recovery_claims (
+  claim_id TEXT PRIMARY KEY,
+  database_identity TEXT NOT NULL,
+  database_birthtime TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  execution_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  lifecycle_revision TEXT NOT NULL,
+  lifecycle_generation TEXT NOT NULL,
+  owner_epoch INTEGER NOT NULL,
+  store_revision TEXT NOT NULL,
+  source_route_generation TEXT NOT NULL,
+  delivery_digest TEXT NOT NULL,
+  original_input_receipt_id TEXT NOT NULL,
+  input_generation TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('prepared', 'needs_reconciliation')),
+  prepared_at INTEGER NOT NULL,
+  UNIQUE (session_id, execution_id, source_route_generation, original_input_receipt_id),
+  UNIQUE (session_id, idempotency_key),
+  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_session_run_recovery_claims_session
+  ON session_run_recovery_claims(session_key, session_id);
+
 -- Processing completion is separate from input consumption; neither schedules replay.
 CREATE TABLE IF NOT EXISTS session_input_completions (
   session_key TEXT NOT NULL,

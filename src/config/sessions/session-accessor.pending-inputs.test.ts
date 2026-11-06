@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runWithSessionRecoveryAdmissionInspection } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -40,6 +41,7 @@ import {
   readSessionPendingInputCustody,
 } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
+import { prepareSessionRunRecoveryClaimInWorker } from "./session-run-recovery-claim.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -105,6 +107,58 @@ describe("accepted input custody", () => {
       receipt.finish("interrupted");
     }
     closeOpenClawAgentDatabasesForTest();
+  });
+
+  it("serializes prepared recovery against pending input and holds it across worker restart", async () => {
+    const runId = "recovery-fence-run";
+    await upsertSessionEntryCore(scope(), { sessionId, lifecycleRevision: "revision-1",
+      delivery: { kind: "internal" }, updatedAt: 2 });
+    const accepted = await stage(runId);
+    const firstEntry = loadSessionEntry(scope())!;
+    const physical = readOpenClawAgentDatabaseIdentity(database());
+    if (typeof physical.identity !== "string" || !physical.birthtime) {
+      throw new Error("Test database has no physical identity");
+    }
+    const input = firstEntry.runRecoveryOriginalInputReceipt!;
+    const route = firstEntry.runRecoverySourceRouteReceipt!;
+    const expected = {
+      agentId: "main", databaseIdentity: physical.identity, databaseBirthtime: physical.birthtime,
+      sessionKey, sessionId, executionId: "execution-1", runId,
+      lifecycleRevision: "revision-1", lifecycleGeneration: input.lifecycleGeneration,
+      ownerEpoch: 7, storeRevision: route.storeRevision,
+      sourceRouteGeneration: route.sourceRouteGeneration, deliveryDigest: route.deliveryDigest,
+      originalInputReceiptId: input.inputId, inputGeneration: input.inputGeneration,
+    };
+    await upsertSessionEntryCore(scope(), { sessionId, lastRunId: runId, status: "done",
+      runRecoverySourceRouteReceipt: { ...route, executionId: expected.executionId },
+      runRecoveryTerminalReceipt: { sessionId, runId, executionId: expected.executionId,
+        executionSource: "owner-claim", ownerEpoch: 7, status: "done", endedAt: 3,
+        lifecycleRevision: expected.lifecycleRevision,
+        lifecycleGeneration: expected.lifecycleGeneration,
+        originalInputReceiptId: input.inputId, inputGeneration: input.inputGeneration },
+      updatedAt: 3 });
+    const prepare = (key = "continue-once", selected = expected) =>
+      prepareSessionRunRecoveryClaimInWorker(database(),
+        toDatabaseOptions(resolveSqliteScope(scope())), selected, key, () => {});
+    expect(prepare()).toEqual({ kind: "held", reason: "unconsumed_input" });
+    await promote(accepted);
+    accepted.finish("interrupted");
+    const claim = prepare();
+    expect(claim).toMatchObject({ kind: "prepared", state: "prepared", repeated: false });
+    expect(prepare()).toEqual({ ...claim, repeated: true });
+    expect(prepare("different-key")).toEqual({ kind: "held", reason: "existing_claim" });
+    expect(prepare("continue-once", { ...expected, databaseIdentity: "other-store" }))
+      .toEqual({ kind: "held", reason: "ambiguous_store" });
+    expect(prepare("continue-once", { ...expected, storeRevision: "other-revision" }))
+      .toEqual({ kind: "held", reason: "changed_generation" });
+    const rejected = await stageSessionPendingInput(scope(), {
+      runId: "new-user-run", message: message("new-user-run"), assertCurrent: () => {},
+    });
+    expect(rejected).toBeUndefined();
+    closeOpenClawAgentDatabasesForTest();
+    expect(prepare()).toEqual({ ...claim, repeated: true });
+    await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 4 });
+    expect(prepare()).toEqual({ kind: "held", reason: "changed_generation" });
   });
 
   it("durably advances owner input generation and invalidates concurrent same-run input", async () => {

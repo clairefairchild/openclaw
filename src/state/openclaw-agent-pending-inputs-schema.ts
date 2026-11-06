@@ -8,6 +8,7 @@ export const SESSION_INPUT_COMPLETIONS_TABLE = "session_input_completions";
 const presentDatabases = new WeakSet<DatabaseSync>();
 const completeDatabases = new WeakSet<DatabaseSync>();
 const completionDatabases = new WeakSet<DatabaseSync>();
+const recoveryClaimDatabases = new WeakSet<DatabaseSync>();
 let absentDatabases = new WeakSet<DatabaseSync>();
 
 /** Cache feature-table presence per connection; first use invalidates earlier absence checks. */
@@ -56,6 +57,28 @@ export function ensureSessionPendingInputsSchema(db: DatabaseSync): void {
   if (!nested) {
     presentDatabases.add(db);
     completeDatabases.add(db);
+  }
+}
+
+/** The pending-input writer and recovery claimant install the same additive fence.
+ * SQLite IMMEDIATE transactions serialize both sides, including other processes. */
+export function ensureSessionRunRecoveryClaimsSchema(db: DatabaseSync): void {
+  if (recoveryClaimDatabases.has(db)) {
+    return;
+  }
+  const start = OPENCLAW_AGENT_SCHEMA_SQL.indexOf(
+    "CREATE TABLE IF NOT EXISTS session_run_recovery_claims (",
+  );
+  const end = OPENCLAW_AGENT_SCHEMA_SQL.indexOf("-- Processing completion", start);
+  if (start < 0 || end < 0) {
+    throw new Error("OpenClaw recovery claim schema marker is missing");
+  }
+  const nested = db.isTransaction;
+  runSqliteImmediateTransactionSync(db, () => {
+    db.exec(OPENCLAW_AGENT_SCHEMA_SQL.slice(start, end)); // sqlite-allow-raw -- Canonical additive DDL only.
+  });
+  if (!nested) {
+    recoveryClaimDatabases.add(db);
   }
 }
 

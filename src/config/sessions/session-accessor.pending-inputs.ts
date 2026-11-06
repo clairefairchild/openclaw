@@ -72,6 +72,7 @@ import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { fingerprintRunRecoverySourceRoute } from "./run-recovery-source-route.js";
+import { hasSessionRunRecoveryClaim } from "./session-run-recovery-claim.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
@@ -365,6 +366,11 @@ export async function stageSessionPendingInput(
           if (
             readSessionEntryRow(current, resolved.sessionKey)?.entry.sessionId !== scope.sessionId
           ) {
+            return undefined;
+          }
+          // The SQLite writer and recovery claimant share this transaction boundary.
+          // A prepared/ambiguous claim permanently holds new normal input admission.
+          if (hasSessionRunRecoveryClaim(current.db, resolved.sessionKey, scope.sessionId)) {
             return undefined;
           }
           if (existing) {
