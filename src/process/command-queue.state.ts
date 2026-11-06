@@ -168,10 +168,18 @@ export function getQueueState() {
   }));
 }
 
-/** Presence-only recovery read. Queue provenance has no session incarnation,
- * and unmarked tasks exist, so an empty result cannot prove clear custody. */
+/** Presence-only recovery read. All work on the exact session lane vetoes,
+ * including unmarked maintenance and work from a prior incarnation. Marked
+ * work on another lane also vetoes by canonical key. Other unmarked lanes and
+ * worker processes cannot be attributed here, so empty is never a clear proof. */
 export function hasQueuedCommandForRecoverySession(sessionKey: string): boolean {
+  const sessionLane = sessionKey.startsWith("session:")
+    ? sessionKey : `session:${sessionKey}`;
   for (const lane of getQueueState().lanes.values()) {
+    if (lane.lane === sessionLane &&
+        (lane.queue.length > 0 || lane.activeTaskIds.size > 0)) {
+      return true;
+    }
     for (const fifo of [lane.queue.foreground, lane.queue.normal, lane.queue.background]) {
       for (let entry = fifo.head; entry; entry = entry.next) {
         if (entry.taskIdentity?.sessionKey === sessionKey ||

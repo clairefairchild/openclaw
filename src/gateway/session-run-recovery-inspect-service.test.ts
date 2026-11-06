@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { clearCommandLane, enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { inspectGatewayRunRecovery } from "./session-run-recovery-inspect-service.js";
@@ -330,6 +331,59 @@ describe("read-only run recovery inspection", () => {
     expect(unknown.evidence.laneQueue).toEqual({ complete: false, state: "unknown" });
     expect(unknown.evidence.process).toEqual({ complete: false, state: "unknown" });
     expect(unknown.reviewToken).toBeUndefined();
+  });
+  it("vetoes queued followups with missing or conflicting agent markers", () => {
+    const controller = new AbortController();
+    const scope = { controller, sessionKey: "agent:main:main", sessionId: "s1" };
+    for (const candidate of [scope, { ...scope, agentId: "other" }]) {
+      const result = inspect({ chatQueuedTurns: new Map([["queued-run", candidate]]) });
+      expect(result.evidence.followupQueue).toEqual({ complete: true, state: "active" });
+      expect(result.reviewToken).toBeUndefined();
+    }
+    expect(inspect({ chatQueuedTurns: new Map([["queued-run", {
+      ...scope, sessionId: "old-session",
+    }]]) }).evidence.followupQueue).toEqual({ complete: false, state: "unknown" });
+    // A fresh worker process has no local map. Empty cannot prove no followup.
+    expect(inspect({ chatQueuedTurns: new Map() }).evidence.followupQueue)
+      .toEqual({ complete: false, state: "unknown" });
+  });
+  it("vetoes unmarked work on the exact session lane and marked work elsewhere", async () => {
+    const sessionLane = "session:agent:main:main";
+    const otherLane = "recovery-queue-veto-test";
+    setCommandLaneConcurrency(sessionLane, 0);
+    setCommandLaneConcurrency(otherLane, 0);
+    expect(inspect().evidence.laneQueue).toEqual({ complete: false, state: "unknown" });
+    const unmarked = enqueueCommandInLane(sessionLane, async () => "unexpected");
+    const marked = enqueueCommandInLane(otherLane, async () => "unexpected", {
+      taskIdentity: { taskKind: "turn", sessionKey: "agent:main:main",
+        sessionId: "s1", runId: "run-1" },
+    });
+    try {
+      expect(inspect().evidence.laneQueue).toEqual({ complete: true, state: "active" });
+      clearCommandLane(sessionLane);
+      await expect(unmarked).rejects.toThrow();
+      expect(inspect().evidence.laneQueue).toEqual({ complete: true, state: "active" });
+    } finally {
+      clearCommandLane(sessionLane);
+      clearCommandLane(otherLane);
+      setCommandLaneConcurrency(sessionLane, 1);
+      setCommandLaneConcurrency(otherLane, 1);
+    }
+    await expect(marked).rejects.toThrow();
+    // The queue's process-local disappearance, including after restart, does
+    // not provide a generation-bound absence proof at durable claim time.
+    expect(inspect().evidence.laneQueue).toEqual({ complete: false, state: "unknown" });
+    expect(inspect().reviewToken).toBeUndefined();
+  });
+  it("vetoes an active unmarked session-lane task until its owner settles", async () => {
+    const lane = "session:agent:main:main";
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const task = enqueueCommandInLane(lane, async () => { await gate; });
+    expect(inspect().evidence.laneQueue).toEqual({ complete: true, state: "active" });
+    release();
+    await task;
+    expect(inspect().evidence.laneQueue).toEqual({ complete: false, state: "unknown" });
   });
   it("vetoes only an exact active worker turn claim, without trusting stale generations", () => {
     const placement = { agentId: "main", sessionKey: "agent:main:main",

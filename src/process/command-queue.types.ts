@@ -37,10 +37,12 @@ export type CommandQueueTaskDeadline =
   | { kind: "unlimited" };
 
 export type CommandQueueEnqueueOptions = {
-  /** Enqueue-time provenance for diagnostics only; never used for admission. */
+  /** Enqueue-time provenance for diagnostics and conservative recovery vetoes.
+   * It is not a durable absence proof and is never used for admission. */
   taskIdentity?: Readonly<{
     taskKind: string;
     sessionKey?: string;
+    sessionId?: string;
     runId?: string;
     requesterSessionKey?: string;
   }>;

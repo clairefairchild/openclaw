@@ -72,10 +72,11 @@ export function inspectGatewayRunRecovery(params: {
   const trackedProcessActive = (params.readTrackedProcess ??
     hasTrackedProcessForRecoverySession)(agentId, key);
   // These Gateway maps are owner-owned and sampled in this same synchronous
-  // call. They prove presence only, never the absence of a different owner.
+  // call. A same-key/session queued entry vetoes even without an agent marker.
+  // Queue disappearance, process restart, or an intervening enqueue cannot
+  // establish absence at the SQLite claim transaction boundary.
   const matches = (candidate: { agentId?: string; sessionKey: string; sessionId: string }) =>
-    candidate.agentId === agentId && candidate.sessionKey === key &&
-    candidate.sessionId === entry.sessionId;
+    candidate.sessionKey === key && candidate.sessionId === entry.sessionId;
   const directControllerRunIds = [...(params.chatAbortControllers?.entries() ?? [])]
     .filter(([, controller]) => matches(controller)).map(([runId]) => runId);
   const directControllerActive = directControllerRunIds.length > 0;

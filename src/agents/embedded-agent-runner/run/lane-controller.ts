@@ -55,6 +55,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     taskKind:
       initialParams.trigger === "cron" ? "cron" : initialParams.spawnedBy ? "spawn" : "turn",
     sessionKey: initialParams.sessionKey,
+    sessionId: initialParams.sessionId,
     runId: initialParams.runId,
     requesterSessionKey: initialParams.spawnedBy ?? undefined,
   };
