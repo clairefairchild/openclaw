@@ -6,6 +6,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  claimRecoveryOutbox,
+  readRecoveryClaimOutbox,
+  recordRecoveryClaimHandoff,
   markRecoveryQueueProducerCutOver,
   openRunRecoveryQueueCoordinator,
   prepareRecoveryClaimIntent,
@@ -170,5 +173,84 @@ describe("durable recovery queue admission", () => {
       .get()).toEqual({ count: 1 });
     f.cutOver();
     expect(prepareRecoveryClaimIntent(f.db, f.claim)).toEqual({ kind: "held", reason: "unresolved_work" });
+  });
+});
+
+function outboxInput(incarnation: string) {
+  const expected = {
+    agentId: "agent-a", databaseIdentity: "physical-a", databaseBirthtime: "birth-a",
+    sessionKey: "agent:agent-a:main", sessionId: "session-a", executionId: "execution-a",
+    runId: "run-a", lifecycleRevision: "revision-a", lifecycleGeneration: "lifecycle-a",
+    ownerEpoch: 7, storeRevision: "store-a", sourceRouteGeneration: "route-a",
+    deliveryDigest: "digest-a", originalInputReceiptId: "input-a", inputGeneration: "input-gen-a",
+  };
+  return { incarnation, expected, idempotencyKey: "recovery-key-a",
+    message: { role: "user" as const, content: "Continue", timestamp: 1,
+      idempotencyKey: "recovery-key-a" }, route: { kind: "internal" as const } };
+}
+
+describe("single-owner recovery claim and accepted input", () => {
+  it("commits claim and actual accepted bytes together, or neither on authority loss", () => {
+    const f = fixture();
+    const input = outboxInput(f.incarnation);
+    const authority = { assertClaimCurrent: () => {} };
+    expect(claimRecoveryOutbox(f.db, input, authority)).toEqual({
+      kind: "held", reason: "queue_not_cut_over" });
+    expect(readRecoveryClaimOutbox(f.db, input.expected.agentId, input.expected.sessionId,
+      input.idempotencyKey)).toBeUndefined();
+    f.cutOver();
+    let checks = 0;
+    expect(() => claimRecoveryOutbox(f.db, input, { assertClaimCurrent: () => {
+      if (++checks === 3) throw new Error("source changed before commit");
+    } })).toThrow("source changed before commit");
+    expect(readRecoveryClaimOutbox(f.db, input.expected.agentId, input.expected.sessionId,
+      input.idempotencyKey)).toBeUndefined();
+    const first = claimRecoveryOutbox(f.db, input, authority);
+    expect(first).toMatchObject({ kind: "prepared", repeated: false,
+      row: { message: input.message, state: "pending" } });
+    expect(claimRecoveryOutbox(f.db, input, authority)).toMatchObject({
+      kind: "prepared", repeated: true, row: { claimId: first.kind === "prepared" ? first.row.claimId : "" },
+    });
+    expect(claimRecoveryOutbox(f.db, { ...input, message: { ...input.message, content: "changed" } },
+      authority)).toEqual({ kind: "held", reason: "existing_claim" });
+  });
+
+  it("reconciles immutable key across restart and never re-admits invalidated custody", () => {
+    const f = fixture();
+    f.cutOver();
+    const input = outboxInput(f.incarnation);
+    const first = claimRecoveryOutbox(f.db, input, { assertClaimCurrent: () => {} });
+    if (first.kind !== "prepared") throw new Error("claim did not prepare");
+    const reopened = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(reopened);
+    const same = readRecoveryClaimOutbox(reopened, input.expected.agentId,
+      input.expected.sessionId, input.idempotencyKey);
+    expect(same).toMatchObject({ claimId: first.row.claimId, message: input.message });
+    expect(recordRecoveryClaimHandoff(reopened, f.incarnation, input.expected.agentId,
+      input.expected.sessionId, input.idempotencyKey, first.row.claimId, "accepted-1"))
+      .toMatchObject({ state: "handed_off", handoffInputId: "accepted-1" });
+    expect(() => recordRecoveryClaimHandoff(reopened, f.incarnation, input.expected.agentId,
+      input.expected.sessionId, input.idempotencyKey, first.row.claimId, "accepted-2"))
+      .toThrow("claim changed");
+    reserveRecoveryQueueWork(reopened, f.unmarked("later-unmarked"));
+    expect(readRecoveryClaimOutbox(reopened, input.expected.agentId,
+      input.expected.sessionId, input.idempotencyKey)?.state).toBe("needs_reconciliation");
+    expect(claimRecoveryOutbox(reopened, input, { assertClaimCurrent: () => {} }))
+      .toEqual({ kind: "held", reason: "invalidated" });
+  });
+
+  it("serializes two owners on one WAL claim key", () => {
+    const f = fixture();
+    f.cutOver();
+    const second = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(second);
+    const input = outboxInput(f.incarnation);
+    const authority = { assertClaimCurrent: () => {} };
+    const a = claimRecoveryOutbox(f.db, input, authority);
+    const b = claimRecoveryOutbox(second, input, authority);
+    expect(a).toMatchObject({ kind: "prepared", repeated: false });
+    expect(b).toMatchObject({ kind: "prepared", repeated: true });
+    expect(second.prepare("SELECT COUNT(*) AS count FROM recovery_claim_outbox").get())
+      .toEqual({ count: 1 });
   });
 });

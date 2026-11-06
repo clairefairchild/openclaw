@@ -41,6 +41,12 @@ import {
   readSessionPendingInputCustody,
 } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
+import {
+  claimRecoveryOutbox,
+  markRecoveryQueueProducerCutOver,
+  openRunRecoveryQueueCoordinator,
+  readRecoveryQueueIncarnation,
+} from "../../state/run-recovery-queue-coordinator.js";
 import { prepareSessionRunRecoveryClaimInWorker } from "./session-run-recovery-claim.js";
 import {
   resolveSqliteScope,
@@ -151,6 +157,70 @@ describe("accepted input custody", () => {
     acceptedLater?.finish("interrupted");
     closeOpenClawAgentDatabasesForTest();
     expect(prepare()).toEqual({ kind: "held", reason: "queue_not_cut_over" });
+  });
+
+  it("hands a single-owner outbox into the real pending-input consumer without rebinding the original route", async () => {
+    const runId = "original-run";
+    await upsertSessionEntryCore(scope(), { sessionId, lifecycleRevision: "revision-1",
+      delivery: { kind: "internal" }, updatedAt: 2 });
+    const original = await stage(runId);
+    const before = loadSessionEntry(scope())!;
+    const physical = readOpenClawAgentDatabaseIdentity(database());
+    if (typeof physical.identity !== "string" || !physical.birthtime) {
+      throw new Error("Test database has no physical identity");
+    }
+    const input = before.runRecoveryOriginalInputReceipt!;
+    const route = before.runRecoverySourceRouteReceipt!;
+    const expected = {
+      agentId: "main", databaseIdentity: physical.identity, databaseBirthtime: physical.birthtime,
+      sessionKey, sessionId, executionId: "execution-1", runId,
+      lifecycleRevision: "revision-1", lifecycleGeneration: input.lifecycleGeneration,
+      ownerEpoch: 7, storeRevision: route.storeRevision,
+      sourceRouteGeneration: route.sourceRouteGeneration, deliveryDigest: route.deliveryDigest,
+      originalInputReceiptId: input.inputId, inputGeneration: input.inputGeneration,
+    };
+    await upsertSessionEntryCore(scope(), { sessionId, lastRunId: runId, status: "done",
+      runRecoverySourceRouteReceipt: { ...route, executionId: expected.executionId },
+      runRecoveryTerminalReceipt: { sessionId, runId, executionId: expected.executionId,
+        executionSource: "owner-claim", ownerEpoch: 7, status: "done", endedAt: 3,
+        lifecycleRevision: expected.lifecycleRevision,
+        lifecycleGeneration: expected.lifecycleGeneration,
+        originalInputReceiptId: input.inputId, inputGeneration: input.inputGeneration },
+      updatedAt: 3 });
+    await promote(original);
+    original.finish("interrupted");
+    const coordinator = openRunRecoveryQueueCoordinator(path.join(fixture.sessionsDir(), "recovery.sqlite"));
+    try {
+      const incarnation = readRecoveryQueueIncarnation(coordinator);
+      markRecoveryQueueProducerCutOver(coordinator, incarnation, "followup");
+      markRecoveryQueueProducerCutOver(coordinator, incarnation, "command-lane");
+      const recoveryMessage = { ...message("recovery", "Complete the original task"),
+        idempotencyKey: "recovery-once" };
+      const result = claimRecoveryOutbox(coordinator, { incarnation, expected,
+        idempotencyKey: recoveryMessage.idempotencyKey, message: recoveryMessage,
+        route: { kind: "internal" } }, { assertClaimCurrent: () => {} });
+      if (result.kind !== "prepared") throw new Error("Claim did not prepare");
+      const recovered = await stageSessionPendingInput(scope(), {
+        runId: `${runId}:recovery`, message: recoveryMessage,
+        requestFingerprint: result.row.claimId,
+        recoveryClaim: { claimId: result.row.claimId, expected }, assertCurrent: () => {},
+      });
+      expect(recovered?.state).toBe("queued");
+      expect(listSessionPendingInputs(scope()).items).toMatchObject([
+        { id: recovered?.inputId, message: recoveryMessage },
+      ]);
+      expect(loadSessionEntry(scope())?.runRecoverySourceRouteReceipt)
+        .toEqual({ ...route, executionId: expected.executionId });
+      expect(await stageSessionPendingInput(scope(), { runId: "later", message: message("later"),
+        assertCurrent: () => {} })).toBeUndefined();
+      if (!recovered) throw new Error("Recovery input was not staged");
+      receipts.push(recovered);
+      await recovered.run(() => appendTranscriptMessage(scope(), { message: recovered.message }));
+      expect(readSessionSubmittedInput(scope(), recoveryMessage.idempotencyKey))
+        .toEqual(recoveryMessage);
+    } finally {
+      coordinator.close();
+    }
   });
 
   it("durably advances owner input generation and invalidates concurrent same-run input", async () => {

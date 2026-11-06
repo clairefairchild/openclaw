@@ -72,7 +72,11 @@ import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { fingerprintRunRecoverySourceRoute } from "./run-recovery-source-route.js";
-import { hasSessionRunRecoveryClaim } from "./session-run-recovery-claim.js";
+import {
+  hasSessionRunRecoveryClaim,
+  installSessionRunRecoveryHandoffFence,
+  type SessionRunRecoveryClaimExpected,
+} from "./session-run-recovery-claim.js";
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
@@ -194,6 +198,8 @@ export async function stageSessionPendingInput(
   options: PendingInputRequest & {
     /** Records processing completion separately from canonical transcript consumption. */
     trackCompletion?: boolean;
+    /** Only a read-back coordinator outbox row may supply this bridge. */
+    recoveryClaim?: { claimId: string; expected: SessionRunRecoveryClaimExpected };
     assertCurrent: () => void;
     /** Retained only after the full admission checks and custody transaction commit. */
     assertAdmittedCurrent?: () => void;
@@ -370,8 +376,45 @@ export async function stageSessionPendingInput(
           }
           // The SQLite writer and recovery claimant share this transaction boundary.
           // A prepared/ambiguous claim permanently holds new normal input admission.
-          if (hasSessionRunRecoveryClaim(current.db, resolved.sessionKey, scope.sessionId)) {
+          if (!options.recoveryClaim &&
+              hasSessionRunRecoveryClaim(current.db, resolved.sessionKey, scope.sessionId)) {
             return undefined;
+          }
+          if (options.recoveryClaim) {
+            const expected = options.recoveryClaim.expected;
+            const session = readSessionEntryRow(current, resolved.sessionKey)?.entry;
+            const physical = readOpenClawAgentDatabaseIdentity(current);
+            const terminal = session?.runRecoveryTerminalReceipt;
+            const input = session?.runRecoveryOriginalInputReceipt;
+            const route = session?.runRecoverySourceRouteReceipt;
+            if (!session || session.sessionId !== expected.sessionId ||
+                current.agentId !== expected.agentId ||
+                physical.identity !== expected.databaseIdentity ||
+                physical.birthtime !== expected.databaseBirthtime ||
+                session.lifecycleRevision !== expected.lifecycleRevision ||
+                terminal?.executionId !== expected.executionId ||
+                terminal.runId !== expected.runId ||
+                terminal.ownerEpoch !== expected.ownerEpoch ||
+                terminal.lifecycleGeneration !== expected.lifecycleGeneration ||
+                terminal.originalInputReceiptId !== expected.originalInputReceiptId ||
+                terminal.inputGeneration !== expected.inputGeneration ||
+                input?.invalidated || input?.inputId !== expected.originalInputReceiptId ||
+                input.inputGeneration !== expected.inputGeneration ||
+                route?.invalidated || route?.sourceRouteGeneration !== expected.sourceRouteGeneration ||
+                route.storeRevision !== expected.storeRevision ||
+                route.deliveryDigest !== expected.deliveryDigest ||
+                route.executionId !== expected.executionId ||
+                fingerprintRunRecoverySourceRoute(session.delivery) !== expected.deliveryDigest ||
+                session.delivery?.kind !== "internal") {
+              throw new Error("Recovery handoff source generation changed");
+            }
+            const otherInput = executeSqliteQueryTakeFirstSync(current.db,
+              getSessionKysely(current.db).selectFrom("session_pending_inputs")
+                .select("input_id").where("session_key", "=", resolved.sessionKey)
+                .where("session_id", "=", scope.sessionId)
+                .where("idempotency_key", "!=", idempotencyKey)
+                .where("consumed_event_id", "is", null));
+            if (otherInput) throw new Error("Recovery handoff has newer accepted input");
           }
           if (existing) {
             // A reconnect supplies fresh admission, never the previous run's closure.
@@ -414,7 +457,11 @@ export async function stageSessionPendingInput(
           // The accepted-input owner advances lineage in the same durable transaction
           // as admission. Replays retain their original generation. A second input
           // for one run destroys proof of which source was the original.
-          if (!existing) {
+          if (options.recoveryClaim) {
+            installSessionRunRecoveryHandoffFence(current.db, options.recoveryClaim.expected,
+              idempotencyKey, options.recoveryClaim.claimId);
+          }
+          if (!existing && !options.recoveryClaim) {
             const session = readSessionEntryRow(current, resolved.sessionKey)?.entry;
             if (!session || session.sessionId !== scope.sessionId) {
               throw new Error("Accepted input lost its exact session before lineage write");
@@ -632,6 +679,22 @@ export function listSessionPendingInputs(
     total: total ?? 0,
     ...(nextBefore !== undefined ? { nextBefore } : {}),
   };
+}
+
+/** Exact immutable-key readback for an ambiguous recovery handoff. It grants no
+ * execution owner and cannot be used to resend a message. */
+export function readRecoveryHandoffPendingInput(
+  scope: PendingInputScope, idempotencyKey: string,
+): { inputId: string; runId: string; requestHash: string; message: PersistedUserTurnMessage } | undefined {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const row = readSessionPendingInputByKey(database, resolved, idempotencyKey);
+    return row && row.consumed_event_id == null ? {
+      inputId: row.input_id, runId: row.run_id, requestHash: row.request_hash,
+      message: parseSessionPendingInputMessage(row.message_json),
+    } : undefined;
+  }, toDatabaseOptions(resolved));
+  return result.found ? result.value : undefined;
 }
 
 export function readSessionPendingInput(
