@@ -21,6 +21,11 @@ export function inspectGatewayRunRecovery(params: {
   placement?: WorkerSessionPlacementRecord;
   chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
+  /** Exact-key, read-only storage receipts; absent/failed reads are not empty custody. */
+  pendingInputReceipts?: ReadonlyArray<
+    | { runId: string; state: "pending"; cancelled?: true }
+    | { runId: string; state: "consumed"; consumedByEventId: string }
+  >;
   readRunOwners?: typeof readAgentRunRecoveryOwnerSnapshot;
   readAdmissions?: typeof readSessionRecoveryAdmissionSnapshot;
 }): SessionsRecoveryInspectResult {
@@ -57,6 +62,15 @@ export function inspectGatewayRunRecovery(params: {
   const directControllerActive = directControllerRunIds.length > 0;
   const queuedTurnActive = [...(params.chatQueuedTurns?.values() ?? [])]
     .some(matches);
+  // The input owner stores receipts under the exact session key and ID. A
+  // pending receipt proves presence only. Consumed/cancelled/absent receipts do
+  // not prove clear custody. This store does not bind an execution ID or retain
+  // the original input ID after final completion, so terminal, lineage, and
+  // store revision remain unknown.
+  const pendingInputActive = Boolean(observedRunId &&
+    params.pendingInputReceipts?.some((receipt) =>
+      receipt.runId === observedRunId && receipt.state === "pending" &&
+      receipt.cancelled !== true));
   const exactOwner = owners.consistent && observedRunId && owners.exactOwners.length === 1 &&
     owners.exactOwners[0]?.runId === observedRunId &&
     owners.activeRunIds.length === 1 && owners.activeRunIds[0] === observedRunId &&
@@ -87,7 +101,7 @@ export function inspectGatewayRunRecovery(params: {
       pendingAdmission: admissions.pending || admissions.active ? ACTIVE : UNKNOWN,
       followupQueue: queuedTurnActive ? ACTIVE : UNKNOWN,
       laneQueue: UNKNOWN,
-      pendingInput: UNKNOWN,
+      pendingInput: pendingInputActive ? ACTIVE : UNKNOWN,
       descendant: UNKNOWN,
       process: UNKNOWN,
       worker: UNKNOWN,

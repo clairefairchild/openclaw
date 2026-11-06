@@ -109,6 +109,33 @@ describe("read-only run recovery inspection", () => {
     expect(result.evidence.direct).toEqual({ complete: false, state: "unknown" });
     expect(result.reviewToken).toBeUndefined();
   });
+  it("reports only an exact durable pending input as active custody", () => {
+    const result = inspect({ pendingInputReceipts: [
+      { runId: "run-1", state: "pending" },
+    ] });
+    expect(result.evidence.pendingInput).toEqual({ complete: true, state: "active" });
+    expect(result.evidence.terminal).toEqual({ complete: false, state: "unknown" });
+    expect(result.evidence.inputLineage).toEqual({ complete: false, state: "unknown" });
+    expect(result.originalInputReceiptId).toBeUndefined();
+    expect(result.storeRevision).toBeUndefined();
+  });
+  it("does not attribute a different run, cancelled, or consumed input to this run", () => {
+    for (const receipt of [
+      { runId: "run-2", state: "pending" as const },
+      { runId: "run-1", state: "pending" as const, cancelled: true as const },
+      { runId: "run-1", state: "consumed" as const, consumedByEventId: "event-1" },
+    ]) {
+      expect(inspect({ pendingInputReceipts: [receipt] }).evidence.pendingInput)
+        .toEqual({ complete: false, state: "unknown" });
+    }
+  });
+  it("does not reuse a prior receipt across a changed run or missing read", () => {
+    const receipt = [{ runId: "run-1", state: "pending" as const }];
+    expect(inspect({ pendingInputReceipts: receipt }).evidence.pendingInput.state).toBe("active");
+    expect(inspect({ entry: { ...entry, lifecycleRunId: "run-2" },
+      pendingInputReceipts: receipt }).evidence.pendingInput.state).toBe("unknown");
+    expect(inspect({ pendingInputReceipts: undefined }).evidence.pendingInput.state).toBe("unknown");
+  });
   it("vetoes pending and acquired admissions before run registration", () => {
     for (const snapshot of [{ active: false, pending: true },
       { active: true, pending: false }]) {

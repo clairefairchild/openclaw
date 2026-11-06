@@ -3,6 +3,7 @@ import {
   errorShape,
   validateSessionsRecoveryInspectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import { inspectGatewayRunRecovery } from "../session-run-recovery-inspect-service.js";
@@ -63,6 +64,7 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
     // The state worker supplies a committed, read-only placement projection.
     // An unavailable store is unknown, never an empty/clear placement.
     let placement: WorkerSessionPlacementRecord | undefined;
+    let pendingInputReceipts: Awaited<ReturnType<typeof readSessionPendingInputReceiptsInWorker>> | undefined;
     try {
       const reply = await executeExistingOpenClawStateRead(
         {},
@@ -74,6 +76,19 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       }
     } catch {
       // Keep the metadata read fail-closed without exposing state-store errors.
+    }
+    const observedRunId = entry.lifecycleRunId || entry.lastRunId;
+    if (observedRunId) {
+      try {
+        pendingInputReceipts = await readSessionPendingInputReceiptsInWorker({
+          agentId: target.agentId,
+          sessionKey: target.canonicalKey,
+          sessionId: entry.sessionId,
+          storePath: target.storePath,
+        }, { runIds: [observedRunId] });
+      } catch {
+        // An unavailable or ambiguous durable read remains unknown.
+      }
     }
     // Authorization and the session row may change while awaiting the worker.
     sessionMutationAuthorization?.assertCurrent();
@@ -112,6 +127,7 @@ export const sessionRecoveryInspectHandlers: GatewayRequestHandlers = {
       storePath: target.storePath,
       entry: currentEntry,
       placement,
+      pendingInputReceipts,
       chatAbortControllers: context.chatAbortControllers,
       chatQueuedTurns: context.chatQueuedTurns,
     });
