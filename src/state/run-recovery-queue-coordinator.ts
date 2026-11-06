@@ -26,6 +26,13 @@ export type RecoveryQueueReservation = {
   queue: RecoveryQueueKind;
   scope: RecoveryWorkScope;
 };
+export type RecoveryQueueWorkReadback = {
+  workId: string;
+  queue: RecoveryQueueKind;
+  scope: RecoveryWorkScope;
+  state: "queued" | "in_flight" | "settled";
+  terminalReceiptId: string | null;
+};
 export type RecoveryClaimIdentity = {
   incarnation: string;
   agentId: string;
@@ -228,6 +235,30 @@ function assertIdentity(value: string, label: string): void {
 function readReservation(db: DatabaseSync, workId: string): ReservationRow | undefined {
   return db.prepare("SELECT work_id, queue_kind, scope_kind, agent_id, session_id, state, terminal_receipt_id FROM recovery_queue_reservations WHERE work_id = ?")
     .get(workId) as ReservationRow | undefined; // sqlite-allow-raw -- Exact reservation lookup.
+}
+
+/** Exact-ID readback for an uncertain write or a later owner reconciliation.
+ * Absence is only an exact ledger fact, never proof that pre-cutover work vanished.
+ */
+export function readRecoveryQueueWork(
+  db: DatabaseSync, incarnation: string, workId: string,
+): RecoveryQueueWorkReadback | undefined {
+  assertIdentity(workId, "work ID");
+  assertIncarnation(db, incarnation);
+  const row = readReservation(db, workId);
+  if (!row) return undefined;
+  if (row.scope_kind === "exact" && (!row.agent_id || !row.session_id)) {
+    throw new Error("Recovery queue exact scope is incomplete");
+  }
+  return {
+    workId: row.work_id,
+    queue: row.queue_kind,
+    scope: row.scope_kind === "unmarked"
+      ? { kind: "unmarked" }
+      : { kind: "exact", agentId: row.agent_id!, sessionId: row.session_id! },
+    state: row.state,
+    terminalReceiptId: row.terminal_receipt_id,
+  };
 }
 
 /** Reserve before queue publication. Repeated exact identity is safe; collision fails. */

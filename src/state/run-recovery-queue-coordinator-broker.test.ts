@@ -31,6 +31,10 @@ try {
   assert.equal(contender.status, 7, contender.stderr);
   assert.match(contender.stderr, /busy|Contention|ownership/i);
   assert.equal(await first.reserve(work), 'repeated');
+  assert.deepEqual(await first.readWork(work.workId), {
+    workId: work.workId, queue: 'followup', scope: work.scope,
+    state: 'queued', terminalReceiptId: null,
+  });
   const read = new DatabaseSync(databasePath);
   assert.equal(read.prepare('SELECT state FROM recovery_queue_reservations WHERE work_id = ?')
     .get(work.workId)?.state, 'queued');
@@ -41,8 +45,11 @@ try {
   try {
     assert.equal(second.incarnation, first.incarnation);
     assert.equal(await second.start(work.workId), 'started');
+    assert.equal((await second.readWork(work.workId))?.state, 'in_flight');
     assert.equal(await second.start(work.workId), 'repeated');
     assert.equal(await second.settle(work.workId, 'terminal-1'), 'settled');
+    assert.equal((await second.readWork(work.workId))?.terminalReceiptId, 'terminal-1');
+    assert.equal(await second.readWork('unknown'), undefined);
     assert.equal(await second.settle(work.workId, 'terminal-1'), 'repeated');
     await assert.rejects(second.settle(work.workId, 'terminal-other'), /receipt changed/);
     await assert.rejects(second.reserve({ ...work, scope: { kind: 'unmarked' } }), /work ID collision/);

@@ -13,6 +13,7 @@ import {
   openRunRecoveryQueueCoordinator,
   prepareRecoveryClaimIntent,
   readRecoveryQueueIncarnation,
+  readRecoveryQueueWork,
   reserveRecoveryQueueWork,
   settleRecoveryQueueWork,
   startRecoveryQueueWork,
@@ -63,6 +64,31 @@ describe("durable recovery queue admission", () => {
     expect(f.db.prepare("SELECT queue_kind FROM recovery_queue_cutovers").all()).toEqual([]);
     expect(prepareRecoveryClaimIntent(f.db, f.claim))
       .toEqual({ kind: "held", reason: "queue_not_cut_over" });
+  });
+
+  it("reads exact custody after restart without treating an unknown ID as queue absence", () => {
+    const f = fixture();
+    expect(readRecoveryQueueWork(f.db, f.incarnation, "unknown")).toBeUndefined();
+    reserveRecoveryQueueWork(f.db, f.exact("accepted"));
+    const reopened = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(reopened);
+    expect(readRecoveryQueueWork(reopened, f.incarnation, "accepted")).toEqual({
+      workId: "accepted", queue: "followup",
+      scope: { kind: "exact", agentId: "agent-a", sessionId: "session-a" },
+      state: "queued", terminalReceiptId: null,
+    });
+    startRecoveryQueueWork(reopened, f.incarnation, "accepted");
+    expect(readRecoveryQueueWork(reopened, f.incarnation, "accepted")?.state).toBe("in_flight");
+    settleRecoveryQueueWork(reopened, f.incarnation, "accepted", "source-terminal-1");
+    expect(readRecoveryQueueWork(reopened, f.incarnation, "accepted")?.terminalReceiptId)
+      .toBe("source-terminal-1");
+    reserveRecoveryQueueWork(reopened, f.unmarked("other-source"));
+    expect(readRecoveryQueueWork(reopened, f.incarnation, "other-source")?.scope)
+      .toEqual({ kind: "unmarked" });
+    expect(() => readRecoveryQueueWork(reopened, "wrong", "accepted"))
+      .toThrow("incarnation changed");
+    // This exact-ID readback never sets a producer migration marker.
+    expect(reopened.prepare("SELECT queue_kind FROM recovery_queue_cutovers").all()).toEqual([]);
   });
 
   it("holds exact and unmarked work, including after restart, and settles idempotently", () => {

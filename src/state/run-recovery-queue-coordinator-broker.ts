@@ -190,6 +190,10 @@ export async function openRecoveryQueueCoordinatorBroker(
       }
       return { kind: "staged" as const, inputId: receipt.inputId, receipt };
     },
+    readWork: (workId: string) =>
+      runSqliteWorkerStoreOperation(activeStore,
+        (scope) => scope.execute({ type: "recoveryQueue.readWork", input: { incarnation, workId } }),
+        undefined, () => owner.assertCurrent()),
     reserve: (work: Omit<RecoveryQueueReservation, "incarnation">) =>
       write((scope) => scope.execute({ type: "recoveryQueue.reserve", input: { ...work, incarnation } })),
     start: (workId: string) =>

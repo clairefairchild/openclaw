@@ -46,3 +46,4 @@ jobs:
           src/config/sessions/session-accessor.pending-inputs.test.ts
           src/gateway/session-run-recovery-fence.test.ts
           src/state/run-recovery-queue-coordinator.test.ts
+          src/state/run-recovery-queue-coordinator-broker.test.ts

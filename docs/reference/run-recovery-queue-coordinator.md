@@ -91,3 +91,23 @@ from an empty snapshot after restart. Its authoritative owner receipts, as
 well as abort, clear, group drain, timeout, and downstream terminal receipts,
 need reconciliation before the marker can be set. Retain all unresolved ledger
 rows for exact-ID review. Recovery remains held with `queue_not_cut_over`.
+
+## Stage 10 exact-ID custody readback (source only, marker off)
+
+The coordinator worker and owner-held broker expose a read-only exact-work-ID
+readback of queue kind, conservative or exact scope, queued/in-flight/settled
+state, and terminal receipt. It validates the physical incarnation and ledger
+state. A process restarted after an ambiguous reserve, start, or settle
+acknowledgment can compare a previously recorded stable work ID and exact
+receipt without issuing another model run or clearing the ledger. An unknown
+ID is only absence of that ID in this ledger, never proof that older in-memory
+work did not exist. Readback does not set a cutover marker, settle a row, or
+reconstruct a lost source-to-work-ID link.
+
+This is a bounded reconciliation primitive, not followup cutover. Production
+callers still do not persist the accepted source-to-work-ID and source-route
+receipt needed for restart reconciliation. Accepted steering handoff to an
+active run, overflow and cancellation cleanup, ambiguous source delivery, and
+pre-existing queue work lack complete terminal custody evidence. Keep the
+followup marker off and preserve every unresolved reservation. The separate
+command-lane marker and owner-by-owner migration are also incomplete.

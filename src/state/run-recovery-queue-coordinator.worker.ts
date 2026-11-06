@@ -9,6 +9,7 @@ import {
   type RecoveryClaimOutboxInput,
   type RecoveryClaimOutboxRow,
   readRecoveryQueueIncarnation,
+  readRecoveryQueueWork,
   reserveRecoveryQueueWork,
   settleRecoveryQueueWork,
   startRecoveryQueueWork,
@@ -29,6 +30,10 @@ export type RecoveryQueueWorkerOperations = {
     output: RecoveryClaimOutboxRow;
   };
   "recoveryQueue.incarnation": { input: undefined; output: string };
+  "recoveryQueue.readWork": {
+    input: { incarnation: string; workId: string };
+    output: ReturnType<typeof readRecoveryQueueWork>;
+  };
   "recoveryQueue.reserve": {
     input: RecoveryQueueReservation;
     output: "reserved" | "repeated";
@@ -67,6 +72,8 @@ export function createSqliteWorkerBackend(
             command.input.claimId, command.input.inputId, authority);
         case "recoveryQueue.incarnation":
           return readRecoveryQueueIncarnation(db);
+        case "recoveryQueue.readWork":
+          return readRecoveryQueueWork(db, command.input.incarnation, command.input.workId);
         case "recoveryQueue.reserve":
           return reserveRecoveryQueueWork(db, command.input, authority);
         case "recoveryQueue.start":
