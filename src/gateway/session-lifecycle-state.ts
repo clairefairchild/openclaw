@@ -4,6 +4,7 @@ import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schem
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  isDefinitiveRunLifecycle,
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
@@ -15,6 +16,7 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
+import { readAgentRunRecoveryOwnerSnapshot } from "../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   readAgentRunProviderReview,
@@ -79,6 +81,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "restartRecoveryForceSafeTools"
   | "mainRestartRecovery"
   | "lifecycleRunId"
+  | "runRecoveryTerminalReceipt"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
@@ -271,7 +274,7 @@ function derivePersistedSessionLifecyclePatch(params: {
   return {
     ...projection.patch,
     ...(phase === "start"
-      ? { lifecycleRunId: runId, lastRunId: undefined }
+      ? { lifecycleRunId: runId, lastRunId: undefined, runRecoveryTerminalReceipt: undefined }
       : projection.patch.status && projection.patch.status !== "running"
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
@@ -477,6 +480,44 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         entry,
         event: params.event,
       });
+      // The session row writer is the durable terminal owner. An observed event
+      // cannot mint a receipt unless it still owns this exact running session.
+      // Missing execution/input/route lineage remains missing, never inferred.
+      if (
+        (phase === "end" || phase === "error") &&
+        (patch.status === "done" || patch.status === "failed" ||
+          patch.status === "timeout" || patch.status === "killed") &&
+        isDefinitiveRunLifecycle({ phase, data: { ...params.event.data } }) &&
+        eventRunId && owningSessionId === entry.sessionId &&
+        entry.lifecycleRunId === eventRunId &&
+        params.event.lifecycleGeneration === getAgentEventLifecycleGeneration() &&
+        isFiniteTimestamp(patch.endedAt)
+      ) {
+        const token = entry.mainRestartRecovery?.executionIdentity;
+        const executionId = token?.runId === eventRunId &&
+          entry.restartRecoveryRuns?.some((run) => run.runId === eventRunId) &&
+          token.executionId && token.contextId ? token.executionId : undefined;
+        const owners = readAgentRunRecoveryOwnerSnapshot({
+          agentId: sessionEntry.agentId,
+          sessionKey: sessionEntry.canonicalKey,
+          sessionId: entry.sessionId,
+        });
+        const ownerEpoch = owners.consistent && owners.lifecycleGeneration ===
+          params.event.lifecycleGeneration && owners.activeRunIds.length === 1 &&
+          owners.activeRunIds[0] === eventRunId && owners.exactOwners.length === 1 &&
+          owners.exactOwners[0]?.runId === eventRunId
+          ? owners.exactOwners[0].ownerEpoch : undefined;
+        patch.runRecoveryTerminalReceipt = {
+          sessionId: entry.sessionId,
+          runId: eventRunId,
+          ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
+          lifecycleGeneration: params.event.lifecycleGeneration,
+          endedAt: patch.endedAt,
+          status: patch.status,
+          ...(executionId ? { executionId } : {}),
+          ...(ownerEpoch !== undefined ? { ownerEpoch } : {}),
+        };
+      }
       if (providerReview && Object.keys(patch).length > 0) {
         patch.providerReview = providerReview.review;
       }

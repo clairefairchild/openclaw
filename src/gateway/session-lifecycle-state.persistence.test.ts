@@ -136,6 +136,55 @@ it.each([
   },
 );
 
+it("durably records only an exact settled terminal owner and clears it on a new run", async () => {
+  const tempDirs = createTempDirTracker();
+  const target = {
+    storePath: path.join(tempDirs.make("openclaw-run-terminal-receipt-"), "sessions.json"),
+    sessionKey: "agent:main:receipt",
+  };
+  routing.loadSessionEntry.mockImplementation(() => ({
+    ...target,
+    canonicalKey: target.sessionKey,
+    agentId: "main",
+    entry: loadSessionEntry(target),
+  }));
+  try {
+    await replaceSessionEntry(target, {
+      sessionId: "receipt-session", lifecycleRevision: "revision-1",
+      lifecycleRunId: "run-1", status: "running", startedAt: 1_000, updatedAt: 1_000,
+    });
+    await lifecycleState.persistGatewaySessionLifecycleEvent({
+      sessionKey: target.sessionKey,
+      event: { runId: "run-1", sessionId: "wrong-session",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(), ts: 2_000,
+        data: { phase: "end", endedAt: 2_000 } },
+    });
+    expect(loadSessionEntry(target)?.runRecoveryTerminalReceipt).toBeUndefined();
+    await lifecycleState.persistGatewaySessionLifecycleEvent({
+      sessionKey: target.sessionKey,
+      event: { runId: "run-1", sessionId: "receipt-session",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(), ts: 2_000,
+        data: { phase: "end", endedAt: 2_000 } },
+    });
+    closeOpenClawAgentDatabasesForTest();
+    expect(loadSessionEntry({ ...target, readConsistency: "latest" })?.runRecoveryTerminalReceipt)
+      .toMatchObject({ sessionId: "receipt-session", runId: "run-1",
+        lifecycleRevision: "revision-1", status: "done", endedAt: 2_000 });
+    await lifecycleState.persistGatewaySessionLifecycleEvent({
+      sessionKey: target.sessionKey,
+      event: { runId: "run-2", sessionId: "receipt-session",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(), ts: 3_000,
+        data: { phase: "start", startedAt: 3_000 } },
+    });
+    expect(loadSessionEntry({ ...target, readConsistency: "latest" })?.runRecoveryTerminalReceipt)
+      .toBeUndefined();
+  } finally {
+    routing.loadSessionEntry.mockReset();
+    closeOpenClawAgentDatabasesForTest();
+    tempDirs.cleanup();
+  }
+});
+
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
   const tempDirs = createTempDirTracker();
   const target = {

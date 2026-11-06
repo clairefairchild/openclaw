@@ -610,6 +610,17 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Exact settled lifecycle write, not by itself proof that all work or delivery ended. */
+  runRecoveryTerminalReceipt?: {
+    sessionId: string;
+    runId: string;
+    lifecycleRevision?: string;
+    lifecycleGeneration: string;
+    endedAt: number;
+    status: "done" | "failed" | "timeout" | "killed";
+    executionId?: string;
+    ownerEpoch?: number;
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */

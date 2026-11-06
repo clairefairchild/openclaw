@@ -46,6 +46,43 @@ describe("read-only run recovery inspection", () => {
     });
     expect(inspect({ entry: { ...bound, restartRecoveryRuns: [] } }).executionId).toBeUndefined();
   });
+  it("accepts terminal proof only for exact durable execution and owner lineage", () => {
+    const token = { tokenVersion: 1 as const, contextId: "context-1",
+      executionId: "execution-1", runId: "run-1", createdAt: 1 };
+    const bound = { ...entry, lifecycleRunId: undefined, lastRunId: "run-1",
+      status: "done" as const, restartRecoveryRuns: [{ runId: "run-1",
+        lifecycleGeneration: "gateway-1" }], mainRestartRecovery: {
+        cycleId: "cycle-1", revision: 1, chargedAttempts: 1, executionIdentity: token,
+      }, runRecoveryTerminalReceipt: { sessionId: "s1", runId: "run-1",
+        lifecycleRevision: "revision-1", lifecycleGeneration: "gateway-1",
+        executionId: "execution-1", ownerEpoch: 7, status: "done" as const,
+        endedAt: 2_000 } } as InternalSessionEntry;
+    expect(inspect({ entry: bound }).evidence.terminal)
+      .toEqual({ complete: true, state: "clear" });
+    for (const changed of [
+      { ...bound, status: "running" as const },
+      { ...bound, lastRunId: "run-2" },
+      { ...bound, sessionId: "s2" },
+      { ...bound, lifecycleRevision: "revision-2" },
+      { ...bound, restartRecoveryRuns: [] },
+      { ...bound, restartRecoveryRuns: [{ runId: "run-1",
+        lifecycleGeneration: "gateway-2" }] },
+      { ...bound, runRecoveryTerminalReceipt: {
+        ...bound.runRecoveryTerminalReceipt!, executionId: "wrong" } },
+      { ...bound, runRecoveryTerminalReceipt: {
+        ...bound.runRecoveryTerminalReceipt!, ownerEpoch: undefined } },
+      { ...bound, runRecoveryTerminalReceipt: undefined },
+    ]) {
+      expect(inspect({ entry: changed }).evidence.terminal)
+        .toEqual({ complete: false, state: "unknown" });
+    }
+    expect(inspect({ entry: bound, readRunOwners: () => ({ ...noOwners(),
+      activeRunIds: ["run-1"] }) }).evidence.terminal.state).toBe("unknown");
+    expect(inspect({ entry: bound, readRunOwners: () => ({ ...noOwners(),
+      consistent: false }) }).evidence.terminal.state).toBe("unknown");
+    expect(inspect({ entry: bound }).evidence.sourceRoute.state).toBe("unknown");
+    expect(inspect({ entry: bound }).evidence.inputLineage.state).toBe("unknown");
+  });
   it("reports only a matching owner-maintained placement generation", () => {
     const placement = { agentId: "main", sessionKey: "agent:main:main",
       sessionId: "s1", generation: 8, turnClaim: null } as WorkerSessionPlacementRecord;

@@ -17,7 +17,7 @@ export function inspectGatewayRunRecovery(params: {
   agentId: string;
   key: string;
   storePath: string;
-  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery">>;
+  entry: SessionEntry & Partial<Pick<InternalSessionEntry, "lifecycleRunId" | "lastRunId" | "mainRestartRecovery" | "runRecoveryTerminalReceipt">>;
   placement?: WorkerSessionPlacementRecord;
   chatAbortControllers?: GatewayRequestContext["chatAbortControllers"];
   chatQueuedTurns?: GatewayRequestContext["chatQueuedTurns"];
@@ -76,6 +76,19 @@ export function inspectGatewayRunRecovery(params: {
     owners.activeRunIds.length === 1 && owners.activeRunIds[0] === observedRunId &&
     directControllerRunIds.every((runId) => runId === observedRunId)
     ? owners.exactOwners[0] : undefined;
+  const receipt = entry.runRecoveryTerminalReceipt;
+  const terminalBound = receipt?.sessionId === entry.sessionId &&
+    receipt.runId === observedRunId && receipt.executionId === exactExecution &&
+    Boolean(exactExecution) && receipt.ownerEpoch !== undefined &&
+    receipt.lifecycleRevision === entry.lifecycleRevision &&
+    entry.restartRecoveryRuns?.some((run) => run.runId === receipt.runId &&
+      run.lifecycleGeneration === receipt.lifecycleGeneration) &&
+    owners.consistent &&
+    typeof receipt.lifecycleGeneration === "string" &&
+    receipt.lifecycleGeneration.length > 0 &&
+    Number.isFinite(receipt.endedAt) && receipt.endedAt > 0 &&
+    entry.status === receipt.status && entry.status !== "running" &&
+    owners.activeRunIds.length === 0 && !directControllerActive;
   return {
     agentId,
     key,
@@ -83,6 +96,8 @@ export function inspectGatewayRunRecovery(params: {
     ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
     ...(observedRunId ? { runId: observedRunId } : {}),
     ...(exactExecution ? { executionId: exactExecution } : {}),
+    ...(terminalBound && receipt?.ownerEpoch !== undefined
+      ? { ownerEpoch: receipt.ownerEpoch } : {}),
     ...(exactPlacement ? { placementGeneration: exactPlacement.generation } : {}),
     ...(exactOwner ? { ownerEpoch: exactOwner.ownerEpoch,
       ownerLifecycleGeneration: owners.lifecycleGeneration } : {}),
@@ -91,7 +106,7 @@ export function inspectGatewayRunRecovery(params: {
       identity: true,
       execution: Boolean(exactExecution),
       store: false,
-      owner: Boolean(exactOwner),
+      owner: Boolean(exactOwner || terminalBound),
       placement: Boolean(exactPlacement),
       route: false,
     },
@@ -105,7 +120,7 @@ export function inspectGatewayRunRecovery(params: {
       descendant: UNKNOWN,
       process: UNKNOWN,
       worker: UNKNOWN,
-      terminal: UNKNOWN,
+      terminal: terminalBound ? { complete: true, state: "clear" } : UNKNOWN,
       sourceRoute: UNKNOWN,
       inputLineage: UNKNOWN,
       delivery: UNKNOWN,
