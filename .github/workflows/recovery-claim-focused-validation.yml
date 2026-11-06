@@ -1,0 +1,30 @@
+name: Recovery Claim Focused Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  focused:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prepare Node and dependencies
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.21.0"
+          install-bun: "false"
+          cache-mode: "restore"
+      - name: Prove source SHA
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Check core types
+        run: pnpm tsgo:core
+      - name: Run focused recovery tests
+        run: pnpm test src/state/run-recovery-queue-coordinator.test.ts src/config/sessions/session-accessor.pending-inputs.test.ts src/gateway/session-run-recovery-fence.test.ts --maxWorkers=1

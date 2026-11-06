@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { PersistedUserTurnMessage } from "../sessions/user-turn-transcript.types.js";
+import { MAX_PAYLOAD_BYTES } from "../gateway/server-constants.js";
 import type { SessionRunRecoveryClaimExpected } from "../config/sessions/session-run-recovery-claim.js";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
@@ -150,6 +151,7 @@ export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync, author
         agent_id TEXT NOT NULL,
         session_id TEXT NOT NULL,
         idempotency_key TEXT NOT NULL,
+        obligation_id TEXT NOT NULL,
         expected_json TEXT NOT NULL,
         message_json TEXT NOT NULL,
         route_json TEXT NOT NULL,
@@ -157,7 +159,8 @@ export function ensureRunRecoveryQueueCoordinatorSchema(db: DatabaseSync, author
         created_at INTEGER NOT NULL,
         handed_off_at INTEGER,
         handoff_input_id TEXT,
-        UNIQUE (agent_id, session_id, idempotency_key)
+        UNIQUE (agent_id, session_id, idempotency_key),
+        UNIQUE (agent_id, session_id, obligation_id)
       ) STRICT;
       CREATE TABLE IF NOT EXISTS recovery_claim_intents (
         intent_id TEXT PRIMARY KEY,
@@ -198,7 +201,7 @@ function assertRecoveryQueueLedgerKnown(db: DatabaseSync): void {
     OR (state <> 'settled' AND terminal_receipt_id IS NOT NULL) LIMIT 1`).get();
   const invalidOutbox = db.prepare(`SELECT 1 FROM recovery_claim_outbox WHERE
     trim(claim_id) = '' OR trim(agent_id) = '' OR trim(session_id) = '' OR
-    trim(idempotency_key) = '' OR state NOT IN ('pending', 'handed_off', 'needs_reconciliation') OR
+    trim(idempotency_key) = '' OR trim(obligation_id) = '' OR state NOT IN ('pending', 'handed_off', 'needs_reconciliation') OR
     (state = 'handed_off' AND (handed_off_at IS NULL OR trim(handoff_input_id) = '')) LIMIT 1`).get();
   const invalidIntent = db.prepare(`SELECT 1 FROM recovery_claim_intents WHERE
     state IS NULL OR state NOT IN ('prepared', 'invalidated')
@@ -394,6 +397,7 @@ type StoredOutboxRow = {
   agent_id: string;
   session_id: string;
   idempotency_key: string;
+  obligation_id: string;
   expected_json: string;
   message_json: string;
   route_json: string;
@@ -431,11 +435,15 @@ export function claimRecoveryOutbox(
    { kind: "held"; reason: "queue_not_cut_over" | "unresolved_work" | "existing_intent" | "existing_claim" | "invalidated" } {
   const { expected } = input;
   for (const [label, value] of Object.entries(expected)) {
-    if (typeof value === "string") assertIdentity(value, label);
+    if (label !== "ownerEpoch") {
+      if (typeof value !== "string") throw new Error(`Recovery queue ${label} is required`);
+      assertIdentity(value, label);
+    }
   }
   assertIdentity(input.idempotencyKey, "idempotency key");
   if (input.message.role !== "user" || input.message.idempotencyKey !== input.idempotencyKey ||
-      input.route.kind !== "internal" || !Number.isSafeInteger(expected.ownerEpoch) || expected.ownerEpoch < 0) {
+      input.route.kind !== "internal" || !Number.isSafeInteger(expected.ownerEpoch) || expected.ownerEpoch < 0 ||
+      Buffer.byteLength(JSON.stringify(input.message), "utf8") > MAX_PAYLOAD_BYTES) {
     throw new Error("Recovery outbox has invalid input or route identity");
   }
   // Host grants are the current-authority boundary; these are not stale token checks.
@@ -445,7 +453,10 @@ export function claimRecoveryOutbox(
   } };
   return writeTransaction(db, checked, () => {
     assertIncarnation(db, input.incarnation);
-    const stored = readStoredOutbox(db, expected.agentId, expected.sessionId, input.idempotencyKey);
+    const stored = readStoredOutbox(db, expected.agentId, expected.sessionId, input.idempotencyKey) ??
+      db.prepare(`SELECT * FROM recovery_claim_outbox WHERE agent_id = ? AND session_id = ?
+        AND obligation_id = ?`).get(expected.agentId, expected.sessionId,
+          expected.originalInputReceiptId) as StoredOutboxRow | undefined;
     if (stored) {
       const same = stored.expected_json === JSON.stringify(expected) &&
         stored.message_json === JSON.stringify(input.message) &&
@@ -466,10 +477,10 @@ export function claimRecoveryOutbox(
         expected.originalInputReceiptId)) return { kind: "held", reason: "existing_intent" };
     const claimId = randomUUID();
     db.prepare(`INSERT INTO recovery_claim_outbox
-      (claim_id, agent_id, session_id, idempotency_key, expected_json, message_json,
-       route_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
+      (claim_id, agent_id, session_id, idempotency_key, obligation_id, expected_json, message_json,
+       route_json, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
       .run(claimId, expected.agentId, expected.sessionId, input.idempotencyKey,
-        JSON.stringify(expected), JSON.stringify(input.message), JSON.stringify(input.route), Date.now()); // sqlite-allow-raw -- Single-owner claim and accepted input.
+        expected.originalInputReceiptId, JSON.stringify(expected), JSON.stringify(input.message), JSON.stringify(input.route), Date.now()); // sqlite-allow-raw -- Single-owner claim and accepted input.
     return { kind: "prepared", row: { claimId, expected, idempotencyKey: input.idempotencyKey,
       message: input.message, route: input.route, state: "pending" }, repeated: false };
   });
@@ -480,6 +491,7 @@ export function recordRecoveryClaimHandoff(
   db: DatabaseSync, incarnation: string, agentId: string, sessionId: string,
   idempotencyKey: string, claimId: string, inputId: string, authority?: RecoveryQueueWriteAuthority,
 ): RecoveryClaimOutboxRow {
+  assertIdentity(inputId, "handoff input ID");
   return writeTransaction(db, authority, () => {
     assertIncarnation(db, incarnation);
     const stored = readStoredOutbox(db, agentId, sessionId, idempotencyKey);

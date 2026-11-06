@@ -387,23 +387,34 @@ export async function stageSessionPendingInput(
             const terminal = session?.runRecoveryTerminalReceipt;
             const input = session?.runRecoveryOriginalInputReceipt;
             const route = session?.runRecoverySourceRouteReceipt;
-            if (!session || session.sessionId !== expected.sessionId ||
+            if (!session || expected.sessionKey !== resolved.sessionKey ||
+                scope.sessionId !== expected.sessionId || session.sessionId !== expected.sessionId ||
                 current.agentId !== expected.agentId ||
                 physical.identity !== expected.databaseIdentity ||
                 physical.birthtime !== expected.databaseBirthtime ||
                 session.lifecycleRevision !== expected.lifecycleRevision ||
+                terminal?.sessionId !== expected.sessionId ||
                 terminal?.executionId !== expected.executionId ||
-                terminal.runId !== expected.runId ||
-                terminal.ownerEpoch !== expected.ownerEpoch ||
-                terminal.lifecycleGeneration !== expected.lifecycleGeneration ||
-                terminal.originalInputReceiptId !== expected.originalInputReceiptId ||
-                terminal.inputGeneration !== expected.inputGeneration ||
-                input?.invalidated || input?.inputId !== expected.originalInputReceiptId ||
-                input.inputGeneration !== expected.inputGeneration ||
-                route?.invalidated || route?.sourceRouteGeneration !== expected.sourceRouteGeneration ||
-                route.storeRevision !== expected.storeRevision ||
-                route.deliveryDigest !== expected.deliveryDigest ||
-                route.executionId !== expected.executionId ||
+                terminal?.runId !== expected.runId ||
+                terminal?.ownerEpoch !== expected.ownerEpoch ||
+                terminal?.lifecycleRevision !== expected.lifecycleRevision ||
+                terminal?.lifecycleGeneration !== expected.lifecycleGeneration ||
+                terminal?.originalInputReceiptId !== expected.originalInputReceiptId ||
+                terminal?.inputGeneration !== expected.inputGeneration ||
+                input?.invalidated || input?.sessionKey !== expected.sessionKey ||
+                input?.sessionId !== expected.sessionId || input?.runId !== expected.runId ||
+                input?.lifecycleRevision !== expected.lifecycleRevision ||
+                input?.lifecycleGeneration !== expected.lifecycleGeneration || input?.inputId !== expected.originalInputReceiptId ||
+                input?.inputGeneration !== expected.inputGeneration ||
+                route?.invalidated || route?.sessionKey !== expected.sessionKey ||
+                route?.sessionId !== expected.sessionId || route?.runId !== expected.runId ||
+                route?.lifecycleRevision !== expected.lifecycleRevision ||
+                route?.lifecycleGeneration !== expected.lifecycleGeneration ||
+                route?.inputGeneration !== expected.inputGeneration ||
+                route?.sourceRouteGeneration !== expected.sourceRouteGeneration ||
+                route?.storeRevision !== expected.storeRevision ||
+                route?.deliveryDigest !== expected.deliveryDigest ||
+                route?.executionId !== expected.executionId ||
                 fingerprintRunRecoverySourceRoute(session.delivery) !== expected.deliveryDigest ||
                 session.delivery?.kind !== "internal") {
               throw new Error("Recovery handoff source generation changed");

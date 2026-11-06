@@ -1,5 +1,6 @@
 /** Async host access to the global queue ledger. This does not activate producer cutover. */
 import { createHash } from "node:crypto";
+import { redactTranscriptMessageForStorage } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import {
   readRecoveryHandoffPendingInput,
   stageSessionPendingInput,
@@ -122,7 +123,8 @@ export async function openRecoveryQueueCoordinatorBroker(
   return {
     incarnation,
     claim: (input: Omit<RecoveryClaimOutboxInput, "incarnation">, authority: RecoveryClaimHostAuthority) => {
-      const command = { ...input, incarnation };
+      const command = { ...input, incarnation,
+        message: redactTranscriptMessageForStorage(input.message, {}) };
       const assertCurrent = () => { owner.assertCurrent(); assertRecoveryClaimHostCurrent(command, authority); };
       return write((scope) => scope.execute({ type: "recoveryQueue.claim", input: command }), assertCurrent);
     },
@@ -149,7 +151,7 @@ export async function openRecoveryQueueCoordinatorBroker(
       if (present) {
         if (present.requestHash !== `request:${row.claimId}` ||
             present.runId !== `${row.expected.runId}:recovery` ||
-            JSON.stringify(present.message) !== JSON.stringify(row.message)) {
+            JSON.stringify(present.message) !== JSON.stringify(redactTranscriptMessageForStorage(row.message, {}))) {
           throw new Error("Recovery handoff idempotency key conflicts with accepted input");
         }
         await write((worker) => worker.execute({ type: "recoveryQueue.handoff",

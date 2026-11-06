@@ -213,6 +213,9 @@ describe("single-owner recovery claim and accepted input", () => {
     });
     expect(claimRecoveryOutbox(f.db, { ...input, message: { ...input.message, content: "changed" } },
       authority)).toEqual({ kind: "held", reason: "existing_claim" });
+    expect(claimRecoveryOutbox(f.db, { ...input, idempotencyKey: "different-key",
+      message: { ...input.message, idempotencyKey: "different-key" } }, authority))
+      .toEqual({ kind: "held", reason: "existing_claim" });
   });
 
   it("reconciles immutable key across restart and never re-admits invalidated custody", () => {
@@ -237,6 +240,18 @@ describe("single-owner recovery claim and accepted input", () => {
       input.expected.sessionId, input.idempotencyKey)?.state).toBe("needs_reconciliation");
     expect(claimRecoveryOutbox(reopened, input, { assertClaimCurrent: () => {} }))
       .toEqual({ kind: "held", reason: "invalidated" });
+  });
+
+  it("migrates an older ledger without losing reservations or intents", () => {
+    const f = fixture();
+    reserveRecoveryQueueWork(f.db, f.exact("retained-work"));
+    f.db.exec("DROP TABLE recovery_claim_outbox");
+    const reopened = openRunRecoveryQueueCoordinator(f.pathname);
+    handles.push(reopened);
+    expect(reopened.prepare("SELECT state FROM recovery_queue_reservations WHERE work_id = ?")
+      .get("retained-work")).toEqual({ state: "queued" });
+    expect(readRecoveryClaimOutbox(reopened, "agent-a", "session-a", "missing"))
+      .toBeUndefined();
   });
 
   it("serializes two owners on one WAL claim key", () => {

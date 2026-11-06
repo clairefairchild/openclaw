@@ -200,6 +200,14 @@ describe("accepted input custody", () => {
         idempotencyKey: recoveryMessage.idempotencyKey, message: recoveryMessage,
         route: { kind: "internal" } }, { assertClaimCurrent: () => {} });
       if (result.kind !== "prepared") throw new Error("Claim did not prepare");
+      await expect(stageSessionPendingInput(scope(), {
+        runId: `${runId}:recovery`, message: recoveryMessage,
+        requestFingerprint: result.row.claimId,
+        recoveryClaim: { claimId: result.row.claimId,
+          expected: { ...expected, inputGeneration: "stale-generation" } },
+        assertCurrent: () => {},
+      })).rejects.toThrow("source generation changed");
+      expect(listSessionPendingInputs(scope()).total).toBe(0);
       const recovered = await stageSessionPendingInput(scope(), {
         runId: `${runId}:recovery`, message: recoveryMessage,
         requestFingerprint: result.row.claimId,
