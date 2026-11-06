@@ -1,10 +1,10 @@
 import { parentPort, workerData } from "node:worker_threads";
-import { installRecoveryQueueCoordinatorThreadHost, recoveryQueueCoordinatorForCaller } from "./run-recovery-queue-coordinator-thread-bridge.js";
+import { installRecoveryQueueCoordinatorWorkerConnection, recoveryQueueCoordinatorForCaller } from "./run-recovery-queue-coordinator-thread-bridge.js";
 
 if (!parentPort) throw new Error("Worker fixture requires a parent");
 let hostRefused = false;
 try {
-  installRecoveryQueueCoordinatorThreadHost();
+  installRecoveryQueueCoordinatorWorkerConnection(workerData.port);
 } catch {
   hostRefused = true;
 }

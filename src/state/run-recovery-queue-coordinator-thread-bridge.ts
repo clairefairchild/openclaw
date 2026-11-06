@@ -1,20 +1,17 @@
-/** Process-local application-worker route to the main-thread recovery owner. */
+/** Explicit capability route from an application Worker to its main-thread recovery owner. */
 import { randomUUID } from "node:crypto";
-import { isMainThread, MessageChannel, MessagePort, postMessageToThread } from "node:worker_threads";
+import { isMainThread, MessageChannel, MessagePort } from "node:worker_threads";
 import { getRecoveryQueueCoordinatorBroker } from "./run-recovery-queue-coordinator-broker.js";
 import type { RecoveryQueueReservation } from "./run-recovery-queue-coordinator.js";
 
-const REQUEST = "openclaw.recovery-queue.request.v1";
 const REPLY_TIMEOUT_MS = 5_000;
-
 type Broker = Awaited<ReturnType<typeof getRecoveryQueueCoordinatorBroker>>;
 type Request =
   | { type: "reserve"; work: Omit<RecoveryQueueReservation, "incarnation"> }
   | { type: "start"; workId: string }
   | { type: "settle"; workId: string; terminalReceiptId: string };
 type Reply = { ok: true; result: string } | { ok: false; error: string };
-
-type Message = { tag: typeof REQUEST; id: string; request: Request; reply: MessagePort };
+type Message = { id: string; request: Request; reply: MessagePort };
 
 function isRequest(value: unknown): value is Request {
   if (!value || typeof value !== "object") return false;
@@ -41,42 +38,35 @@ async function execute(broker: Broker, request: Request): Promise<string> {
   }
 }
 
-/** Install only in the owning main thread. No worker can open or impersonate the store. */
-let hostReferences = 0;
-let removeHostListener: (() => Promise<void>) | undefined;
-
-export function installRecoveryQueueCoordinatorThreadHost(): () => Promise<void> {
-  if (!isMainThread) throw new Error("Recovery queue thread host requires the main thread");
-  hostReferences += 1;
-  let released = false;
-  const release = async () => {
-    if (released) return;
-    released = true;
-    await releaseHostReference();
-  };
-  if (removeHostListener) return release;
-  let active = true;
+/** The host must transfer this port to one specifically admitted Worker. */
+export function createRecoveryQueueCoordinatorWorkerConnection(): {
+  port: MessagePort;
+  close: () => Promise<void>;
+} {
+  if (!isMainThread) throw new Error("Recovery queue connection requires the main-thread host");
+  const { port1: host, port2: port } = new MessageChannel();
   const pending = new Set<Promise<void>>();
-  const onMessage = (value: unknown, source: number) => {
-    if (!value || typeof value !== "object" || (value as Partial<Message>).tag !== REQUEST) return;
+  let closed = false;
+  const onMessage = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
     const message = value as Partial<Message>;
     if (!(message.reply instanceof MessagePort)) return;
     const reply = message.reply;
-    if (!active || source <= 0 || typeof message.id !== "string" || !isRequest(message.request)) {
-      reply.postMessage({ ok: false, error: "Recovery queue host request refused" } satisfies Reply);
-      reply.close();
-      return;
-    }
     const respond = (response: Reply) => {
       try { reply.postMessage(response); } catch { /* Reply loss leaves custody ambiguous. */ }
     };
+    if (closed || typeof message.id !== "string" || !isRequest(message.request)) {
+      respond({ ok: false, error: "Recovery queue host request refused" });
+      reply.close();
+      return;
+    }
     const operation = (async () => {
       try {
-        // This is the only route to the existing owner, integrity admission,
-        // incarnation fence, and native SQLite worker. Worker input never names a DB.
+        // The existing host broker retains physical ownership, integrity and
+        // incarnation checks, and native worker write admission. No DB path or
+        // authority travels over this connection.
         const broker = await getRecoveryQueueCoordinatorBroker();
-        const result = await execute(broker, message.request!);
-        respond({ ok: true, result });
+        respond({ ok: true, result: await execute(broker, message.request!) });
       } catch (error) {
         respond({ ok: false, error: error instanceof Error ? error.message : "Recovery queue host failed" });
       } finally {
@@ -86,29 +76,34 @@ export function installRecoveryQueueCoordinatorThreadHost(): () => Promise<void>
     pending.add(operation);
     void operation.finally(() => pending.delete(operation));
   };
-  process.on("workerMessage", onMessage);
-  removeHostListener = async () => {
-    active = false;
-    process.off("workerMessage", onMessage);
-    await Promise.allSettled(pending);
+  host.on("message", onMessage);
+  return {
+    port,
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      host.off("message", onMessage);
+      host.close();
+      await Promise.allSettled(pending);
+    },
   };
-  return release;
 }
 
-async function releaseHostReference(): Promise<void> {
-  hostReferences -= 1;
-  if (hostReferences === 0) {
-    const remove = removeHostListener;
-    removeHostListener = undefined;
-    await remove?.();
+let workerConnection: MessagePort | undefined;
+/** Install only the port transferred by the parent that owns this Worker's custody. */
+export function installRecoveryQueueCoordinatorWorkerConnection(port: MessagePort): void {
+  if (isMainThread || workerConnection || !(port instanceof MessagePort)) {
+    throw new Error("Recovery queue worker connection refused");
   }
+  workerConnection = port;
+  port.unref();
 }
 
-/** An absent or refusing host fails closed. An uncertain reply must be reconciled by work ID. */
+/** Missing host capability fails closed; ambiguous replies require stable-ID readback. */
 async function requestHost(request: Request): Promise<string> {
-  if (isMainThread) {
-    return execute(await getRecoveryQueueCoordinatorBroker(), request);
-  }
+  if (isMainThread) return execute(await getRecoveryQueueCoordinatorBroker(), request);
+  const connection = workerConnection;
+  if (!connection) throw new Error("Recovery queue worker has no authorized host connection");
   const { port1, port2 } = new MessageChannel();
   const id = randomUUID();
   try {
@@ -124,8 +119,8 @@ async function requestHost(request: Request): Promise<string> {
         reject(new Error(`Recovery queue host reply uncertain for ${id}`));
       });
     });
-    void reply.catch(() => undefined); // Delivery refusal can precede awaiting the reply.
-    await postMessageToThread(0, { tag: REQUEST, id, request, reply: port2 } satisfies Message, [port2], REPLY_TIMEOUT_MS);
+    void reply.catch(() => undefined);
+    connection.postMessage({ id, request, reply: port2 } satisfies Message, [port2]);
     return await reply;
   } finally {
     port1.close();
