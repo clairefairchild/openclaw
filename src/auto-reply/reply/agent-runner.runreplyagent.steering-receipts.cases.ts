@@ -53,7 +53,7 @@ export function registerSteeringReceiptCases({
     async (dropPolicy) => {
       const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
       vi.mocked(parkSteerCandidateWithRecoveryReservation).mockImplementation(
-      async (...args) => actualQueue.parkSteerCandidate(...args),
+      async (key, run, settings, runner) => actualQueue.parkSteerCandidate(key, run, settings, runner),
     );
       const active = createReplyOperation({
         sessionKey: "main",
@@ -109,7 +109,7 @@ export function registerSteeringReceiptCases({
   it("queues a waiting steer when its predecessor outlives terminal delivery", async () => {
     const actualQueue = await vi.importActual<typeof import("./queue.js")>("./queue.js");
     vi.mocked(parkSteerCandidateWithRecoveryReservation).mockImplementation(
-      async (...args) => actualQueue.parkSteerCandidate(...args),
+      async (key, run, settings, runner) => actualQueue.parkSteerCandidate(key, run, settings, runner),
     );
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
       status: "running",

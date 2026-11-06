@@ -108,10 +108,10 @@ export async function runActiveReplySteer(
       sourceTurnId,
       targetRunId: injectionTarget?.runId ?? null,
       routeJson: JSON.stringify({
-        channel: followupRun.originatingChannel ?? sessionCtx.Provider ?? followupRun.run.messageProvider ?? null,
-        to: followupRun.originatingTo ?? sessionCtx.OriginatingTo ?? null,
+        channel: followupRun.originatingChannel ?? params.sessionCtx.Provider ?? followupRun.run.messageProvider ?? null,
+        to: followupRun.originatingTo ?? params.sessionCtx.OriginatingTo ?? null,
         chatId: followupRun.originatingChatId ?? null,
-        accountId: followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId ?? null,
+        accountId: followupRun.originatingAccountId ?? params.sessionCtx.AccountId ?? followupRun.run.agentAccountId ?? null,
         threadId: followupRun.originatingThreadId ?? null,
       }),
     },
